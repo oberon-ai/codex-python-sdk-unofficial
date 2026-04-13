@@ -19,4 +19,6 @@ The runtime concurrency and state model lives in [docs/adr/0002-concurrency-and-
 
 The error hierarchy, timeout defaults, and cancellation policy live in [docs/adr/0003-errors-timeouts-and-cancellation.md](docs/adr/0003-errors-timeouts-and-cancellation.md).
 
+The package boundary guide lives in [docs/package-layout.md](docs/package-layout.md).
+
 Claude Agent SDK references inform ergonomics only. They are not the architecture template for this repository.

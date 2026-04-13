@@ -1,3 +1,10 @@
+"""Public package barrel for the unofficial Codex Agent SDK.
+
+Only implemented surfaces are re-exported here. The scaffolded modules under
+``transport``, ``rpc``, ``generated``, ``protocol``, and ``testing`` reserve
+the intended architecture for follow-on implementation tasks.
+"""
+
 from .errors import (
     AlreadyInitializedError,
     ApprovalCallbackError,

@@ -2,3 +2,5 @@
 .yolopilot/
 **/.yolopilot
 **/.yolopilot/
+__pycache__/
+*.py[cod]
