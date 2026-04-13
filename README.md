@@ -23,12 +23,20 @@ The package boundary guide lives in [docs/package-layout.md](docs/package-layout
 
 The curated root import surface and import policy live in [docs/public-import-policy.md](docs/public-import-policy.md).
 
+The dependency rationale and pinned repo toolchain live in [docs/dependency-policy.md](docs/dependency-policy.md).
+
 ## Development
 
 Install the project in editable mode with dev tooling:
 
 ```bash
 python -m pip install -e ".[dev]"
+```
+
+For exact repo pins used by local verification and CI:
+
+```bash
+python -m pip install -e . -r requirements/dev.txt
 ```
 
 Expected local and CI-friendly commands live in [CONTRIBUTING.md](CONTRIBUTING.md).

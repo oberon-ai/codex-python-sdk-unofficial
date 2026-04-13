@@ -8,7 +8,7 @@ version = "0.0.0"
 description = "Unofficial, natively async Python SDK for Codex app-server over JSON-RPC v2 on stdio."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["pydantic>=2.13,<3"]
 keywords = ["codex", "json-rpc", "asyncio", "sdk"]
 classifiers = [
     "Operating System :: OS Independent",
@@ -20,11 +20,13 @@ classifiers = [
 
 [project.optional-dependencies]
 dev = [
-    "build>=1.2",
-    "mypy>=1.10",
-    "pytest>=8.2",
-    "ruff>=0.6",
+    "build>=1.4,<2",
+    "mypy>=1.20,<2",
+    "pytest>=9,<10",
+    "pytest-asyncio>=1.3,<2",
+    "ruff>=0.15,<0.16",
 ]
+codegen = ["datamodel-code-generator>=0.56,<0.57"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

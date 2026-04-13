@@ -4,12 +4,26 @@
 
 The project uses a `src/` layout and expects Python 3.11 or newer.
 
+Standard editable install:
+
 ```bash
 python -m pip install -e ".[dev]"
 ```
 
-That editable install is the normal entry point for local work and CI because it
-keeps imports aligned with the packaged layout.
+Reproducible repo pins for local work or CI:
+
+```bash
+python -m pip install -e . -r requirements/dev.txt
+```
+
+Code generation work pulls in a separate maintainer-only toolchain:
+
+```bash
+python -m pip install -e . -r requirements/dev.txt -r requirements/codegen.txt
+```
+
+The dependency rationale and pinning policy live in
+`docs/dependency-policy.md`.
 
 ## Quality gates
 

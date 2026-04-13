@@ -22,10 +22,11 @@ class ProjectConfigurationTests(unittest.TestCase):
     def test_dev_extra_includes_quality_tools(self) -> None:
         dev_dependencies = set(PYPROJECT_DATA["project"]["optional-dependencies"]["dev"])
 
-        self.assertTrue(any(dep.startswith("build>=") for dep in dev_dependencies))
-        self.assertTrue(any(dep.startswith("mypy>=") for dep in dev_dependencies))
-        self.assertTrue(any(dep.startswith("pytest>=") for dep in dev_dependencies))
-        self.assertTrue(any(dep.startswith("ruff>=") for dep in dev_dependencies))
+        self.assertIn("build>=1.4,<2", dev_dependencies)
+        self.assertIn("mypy>=1.20,<2", dev_dependencies)
+        self.assertIn("pytest>=9,<10", dev_dependencies)
+        self.assertIn("pytest-asyncio>=1.3,<2", dev_dependencies)
+        self.assertIn("ruff>=0.15,<0.16", dev_dependencies)
 
     def test_quality_tools_preserve_generated_code_boundary(self) -> None:
         ruff = PYPROJECT_DATA["tool"]["ruff"]
