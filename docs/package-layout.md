@@ -27,6 +27,9 @@ separate as the SDK grows.
 
 - `tests/`
   - Unit and integration tests for handwritten and generated layers.
+- `tests/fixtures/`
+  - Curated JSON-RPC envelopes, schema snapshots, fake-server scripts, and
+    golden transcripts used by deterministic protocol and client tests.
 - `examples/`
   - User-facing example programs and sample workflows.
 - `scripts/`
