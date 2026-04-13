@@ -21,4 +21,14 @@ The error hierarchy, timeout defaults, and cancellation policy live in [docs/adr
 
 The package boundary guide lives in [docs/package-layout.md](docs/package-layout.md).
 
+## Development
+
+Install the project in editable mode with dev tooling:
+
+```bash
+python -m pip install -e ".[dev]"
+```
+
+Expected local and CI-friendly commands live in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 Claude Agent SDK references inform ergonomics only. They are not the architecture template for this repository.

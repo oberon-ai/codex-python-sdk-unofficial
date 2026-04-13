@@ -17,8 +17,8 @@ from codex_agent_sdk import (
     NotInitializedError,
     RequestTimeoutError,
     ResponseValidationError,
-    RetryBudgetExceededError,
     RetryableOverloadError,
+    RetryBudgetExceededError,
     ShutdownError,
     ShutdownTimeoutError,
     StartupError,
@@ -64,7 +64,9 @@ class JsonRpcMappingTests(unittest.TestCase):
 
     def test_handshake_errors_map_from_server_messages(self) -> None:
         self.assertIsInstance(map_jsonrpc_error(-32002, "Not initialized"), NotInitializedError)
-        self.assertIsInstance(map_jsonrpc_error(-32002, "Already initialized"), AlreadyInitializedError)
+        self.assertIsInstance(
+            map_jsonrpc_error(-32002, "Already initialized"), AlreadyInitializedError
+        )
 
     def test_generic_server_error_remains_non_retryable(self) -> None:
         error = map_jsonrpc_error(-32050, "internal worker pool fault")

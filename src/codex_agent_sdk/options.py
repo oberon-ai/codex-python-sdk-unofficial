@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 20.0
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0

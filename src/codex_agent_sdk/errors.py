@@ -77,7 +77,12 @@ class ProcessExitError(TransportError):
 class TransportClosedError(TransportError):
     """Raised when the stdio transport closes before the SDK expects it to."""
 
-    def __init__(self, message: str = "app-server transport closed", *, stderr_tail: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str = "app-server transport closed",
+        *,
+        stderr_tail: str | None = None,
+    ) -> None:
         self.stderr_tail = stderr_tail
         super().__init__(_compose_message(message, stderr_tail=stderr_tail))
 
@@ -342,7 +347,11 @@ def _is_overload_error(code: int, message: str, data: Any) -> bool:
 
 def _contains_retry_budget_text(message: str) -> bool:
     lowered = message.lower()
-    return "retry budget" in lowered or "retry limit" in lowered or "too many failed attempts" in lowered
+    return (
+        "retry budget" in lowered
+        or "retry limit" in lowered
+        or "too many failed attempts" in lowered
+    )
 
 
 def _contains_overload_marker(data: Any) -> bool:
@@ -352,8 +361,14 @@ def _contains_overload_marker(data: Any) -> bool:
         return data.lower() == "server_overloaded"
     if isinstance(data, Mapping):
         for key, value in data.items():
-            if key in {"codexErrorInfo", "codex_error_info", "errorInfo", "error_info"} and _contains_overload_marker(value):
-                return True
+            if key in {
+                "codexErrorInfo",
+                "codex_error_info",
+                "errorInfo",
+                "error_info",
+            }:
+                if _contains_overload_marker(value):
+                    return True
             if _contains_overload_marker(value):
                 return True
         return False

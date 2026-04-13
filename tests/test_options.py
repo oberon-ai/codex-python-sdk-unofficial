@@ -3,10 +3,10 @@ from __future__ import annotations
 import unittest
 
 from codex_agent_sdk import (
-    AppServerConfig,
     DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
     DEFAULT_STARTUP_TIMEOUT_SECONDS,
     DEFAULT_TIMEOUT_POLICY,
+    AppServerConfig,
 )
 from codex_agent_sdk.options import CodexOptions, TimeoutPolicy
 

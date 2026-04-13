@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-agent-sdk-unofficial"
+version = "0.0.0"
+description = "Unofficial, natively async Python SDK for Codex app-server over JSON-RPC v2 on stdio."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+keywords = ["codex", "json-rpc", "asyncio", "sdk"]
+classifiers = [
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    "mypy>=1.10",
+    "pytest>=8.2",
+    "ruff>=0.6",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+codex_agent_sdk = ["py.typed"]
+
+[tool.pytest.ini_options]
+addopts = ["-ra"]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = ["src/codex_agent_sdk/generated"]
+
+[tool.ruff.lint]
+select = ["B", "E", "F", "I", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["codex_agent_sdk"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "tests"]
+mypy_path = "src"
+strict = true
+warn_unused_configs = true
+show_error_codes = true
+pretty = true
+exclude = "^src/codex_agent_sdk/generated/"
