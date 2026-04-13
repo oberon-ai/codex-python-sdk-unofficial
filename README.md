@@ -13,4 +13,6 @@ The upstream reading order for future implementation work lives in [docs/upstrea
 
 The draft public surface for the SDK lives in [docs/public-api-contract.md](docs/public-api-contract.md).
 
+The Claude-to-Codex ergonomics translation note lives in [docs/ergonomics-mapping.md](docs/ergonomics-mapping.md).
+
 Claude Agent SDK references inform ergonomics only. They are not the architecture template for this repository.
