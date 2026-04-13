@@ -9,4 +9,6 @@ The project scope is intentionally narrow in early tasks so the implementation d
 - the explicit non-goals and rejected shortcuts
 - the baseline Python version and async-only requirement
 
+The upstream reading order for future implementation work lives in [docs/upstream-reference-map.md](docs/upstream-reference-map.md).
+
 Claude Agent SDK references inform ergonomics only. They are not the architecture template for this repository.
