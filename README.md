@@ -15,4 +15,6 @@ The draft public surface for the SDK lives in [docs/public-api-contract.md](docs
 
 The Claude-to-Codex ergonomics translation note lives in [docs/ergonomics-mapping.md](docs/ergonomics-mapping.md).
 
+The runtime concurrency and state model lives in [docs/adr/0002-concurrency-and-state-model.md](docs/adr/0002-concurrency-and-state-model.md).
+
 Claude Agent SDK references inform ergonomics only. They are not the architecture template for this repository.
