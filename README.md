@@ -21,6 +21,8 @@ The error hierarchy, timeout defaults, and cancellation policy live in [docs/adr
 
 The package boundary guide lives in [docs/package-layout.md](docs/package-layout.md).
 
+The curated root import surface and import policy live in [docs/public-import-policy.md](docs/public-import-policy.md).
+
 ## Development
 
 Install the project in editable mode with dev tooling:

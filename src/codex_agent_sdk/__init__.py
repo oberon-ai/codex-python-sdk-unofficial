@@ -1,10 +1,22 @@
-"""Public package barrel for the unofficial Codex Agent SDK.
+"""Curated public barrel for the unofficial Codex Agent SDK.
 
-Only implemented surfaces are re-exported here. The scaffolded modules under
-``transport``, ``rpc``, ``generated``, ``protocol``, and ``testing`` reserve
-the intended architecture for follow-on implementation tasks.
+Happy-path imports should come from this module:
+
+- ``query()`` for one-shot scripted use
+- ``CodexSDKClient`` for stateful thread workflows
+- ``AppServerClient`` for low-level JSON-RPC access
+- ``CodexOptions`` and ``AppServerConfig`` for configuration
+
+Import policy:
+
+- names re-exported here are the supported public API
+- ``errors`` and ``options`` remain stable support modules for focused imports
+- lower-level layers under ``transport``, ``rpc``, ``protocol``, ``generated``,
+  and ``testing`` stay importable but are not part of the curated root surface
 """
 
+from .approvals import ApprovalDecision, ApprovalRequest
+from .client import AppServerClient, CodexSDKClient
 from .errors import (
     AlreadyInitializedError,
     ApprovalCallbackError,
@@ -41,6 +53,21 @@ from .errors import (
     is_retryable_error,
     map_jsonrpc_error,
 )
+from .events import (
+    AgentTextDeltaEvent,
+    ApprovalRequestedEvent,
+    CommandOutputDeltaEvent,
+    ItemCompletedEvent,
+    ItemStartedEvent,
+    RawNotificationEvent,
+    RawServerRequestEvent,
+    ReasoningTextDeltaEvent,
+    ThreadStatusChangedEvent,
+    TokenUsageUpdatedEvent,
+    TurnCompletedEvent,
+    TurnEvent,
+    TurnStartedEvent,
+)
 from .options import (
     DEFAULT_SHUTDOWN_TIMEOUT_SECONDS,
     DEFAULT_STARTUP_TIMEOUT_SECONDS,
@@ -49,22 +76,33 @@ from .options import (
     CodexOptions,
     TimeoutPolicy,
 )
+from .query import query
+from .results import TurnHandle, TurnResult
 
 __all__ = [
-    "AlreadyInitializedError",
+    "ApprovalDecision",
+    "ApprovalRequest",
+    "AppServerClient",
     "AppServerConfig",
+    "AgentTextDeltaEvent",
+    "AlreadyInitializedError",
     "ApprovalCallbackError",
     "ApprovalError",
     "ApprovalRequestExpiredError",
+    "ApprovalRequestedEvent",
     "ClientStateError",
     "CodexError",
     "CodexNotFoundError",
     "CodexOptions",
+    "CodexSDKClient",
     "CodexTimeoutError",
+    "CommandOutputDeltaEvent",
     "DEFAULT_SHUTDOWN_TIMEOUT_SECONDS",
     "DEFAULT_STARTUP_TIMEOUT_SECONDS",
     "DEFAULT_TIMEOUT_POLICY",
     "InvalidApprovalDecisionError",
+    "ItemCompletedEvent",
+    "ItemStartedEvent",
     "JsonRpcError",
     "JsonRpcInternalError",
     "JsonRpcInvalidParamsError",
@@ -76,6 +114,10 @@ __all__ = [
     "NotInitializedError",
     "ProcessExitError",
     "ProtocolError",
+    "query",
+    "RawNotificationEvent",
+    "RawServerRequestEvent",
+    "ReasoningTextDeltaEvent",
     "RequestTimeoutError",
     "ResponseValidationError",
     "RetryBudgetExceededError",
@@ -84,10 +126,17 @@ __all__ = [
     "ShutdownTimeoutError",
     "StartupError",
     "StartupTimeoutError",
+    "ThreadStatusChangedEvent",
     "TimeoutPolicy",
+    "TokenUsageUpdatedEvent",
     "TransportClosedError",
     "TransportError",
     "TransportWriteError",
+    "TurnCompletedEvent",
+    "TurnEvent",
+    "TurnHandle",
+    "TurnResult",
+    "TurnStartedEvent",
     "UnexpectedMessageError",
     "is_retryable_error",
     "map_jsonrpc_error",

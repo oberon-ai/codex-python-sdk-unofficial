@@ -34,6 +34,8 @@ separate as the SDK grows.
 
 ## Contributor rules
 
+- Re-export public SDK names from `codex_agent_sdk/__init__.py` so users do not
+  have to learn internal module paths for the happy path.
 - Keep generated protocol code isolated under `src/codex_agent_sdk/generated/`.
 - Put transport concerns in `transport/`, not in public API helpers.
 - Put JSON-RPC request and routing concerns in `rpc/`, not in `client.py`.
