@@ -34,6 +34,8 @@ These names should be importable from `codex_agent_sdk`:
 | `CodexSDKClient` | class | High-level stateful client for thread workflows and streamed turn events. |
 | `TurnHandle` | class | Handle for one in-flight or completed turn, including event iteration and lifecycle helpers. |
 | `TurnCompletion` | dataclass | Low-level terminal turn payload paired with the latest observed token usage. |
+| `TurnItemAggregation` | dataclass | Assembled per-item helper view built from streamed deltas and final item payloads. |
+| `TurnOutputAggregator` | class | Public helper that observes raw `TurnEvent` values while keeping assembled text and per-item output state. |
 | `TurnResult` | dataclass | Final summarized result for a turn. |
 | `OverloadRetryPolicy` | dataclass | Opt-in backoff policy for replaying overload-safe operations. |
 | `TurnEvent` | type alias | Union of typed high-level events plus raw passthrough wrappers. |
@@ -357,12 +359,42 @@ It should contain:
 - `error`
 - `assistant_text`
 - `structured_output`
+- `item_aggregations`
 
 Contract notes:
 
 - `status` is terminal only: `completed`, `interrupted`, or `failed`.
 - `structured_output` is populated only when `output_schema` was supplied and Codex returned a schema-conforming final assistant payload.
 - `items` is the final authoritative item list for the turn, even though streaming item lifecycle is observed incrementally.
+- `item_aggregations` preserves per-item boundaries for streamed agent text, reasoning text, command output, plan deltas, and other supported item-scoped convenience state.
+- `assistant_text` should be reconstructed from streamed agent-message deltas when available, and fall back to final agent-message items when the protocol never emitted those deltas.
+- convenience accessors such as assembled command output or reasoning text may be derived from `item_aggregations`, but the raw item list and raw event stream remain the source of truth.
+
+## `TurnOutputAggregator`
+
+`TurnOutputAggregator` is the lightweight public helper for callers that want
+to keep the raw event stream but also maintain assembled convenience state while
+iterating.
+
+It should:
+
+- accept streamed `TurnEvent` values via `observe(event)`
+- preserve item boundaries instead of flattening all text or output into one buffer
+- expose best-effort assembled properties such as:
+  - `assistant_text`
+  - `command_output`
+  - `reasoning_text`
+  - `plan_text`
+  - `item_aggregations`
+- expose `result` after a terminal completion event has been observed
+
+Contract notes:
+
+- `TurnOutputAggregator` does not replace the raw event stream; it layers
+  assembled convenience state over it.
+- the helper should not mutate or reorder the underlying event objects.
+- if a `TurnCompletedEvent` already carries a `TurnResult`, the aggregator may
+  reuse it rather than rebuilding a second terminal summary.
 
 ## `TurnCompletion`
 

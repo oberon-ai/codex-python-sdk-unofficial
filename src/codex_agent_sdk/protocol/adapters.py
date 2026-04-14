@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
-from typing import Any
+from collections.abc import Mapping
 
-from ..errors import CodexError
+from .._turn_aggregation import (
+    TurnOutputState as TurnEventAdapterState,
+)
+from .._turn_aggregation import (
+    build_turn_result,
+    observe_turn_event,
+)
 from ..events import (
     AgentTextDeltaEvent,
     CommandOutputDeltaEvent,
@@ -29,24 +33,13 @@ from ..generated.stable import (
     ReasoningTextDeltaNotification,
     ThreadStatus,
     ThreadStatusChangedNotification,
-    ThreadTokenUsage,
     ThreadTokenUsageUpdatedNotification,
     TurnCompletedNotification,
-    TurnError,
     TurnStartedNotification,
     TurnStatus,
 )
-from ..results import TurnResult
 from ..rpc.jsonrpc import JsonRpcEnvelopeLike
 from .registries import RawServerNotification, TypedServerNotification, parse_server_notification
-
-
-@dataclass(slots=True)
-class TurnEventAdapterState:
-    """Mutable per-turn adapter state carried across streamed notifications."""
-
-    assistant_text_fragments: list[str] = field(default_factory=list)
-    latest_token_usage: ThreadTokenUsage | None = None
 
 
 def adapt_turn_notification(
@@ -70,11 +63,13 @@ def adapt_turn_notification(
     if isinstance(params, TurnStartedNotification):
         if params.turn.id != target_turn_id:
             return None
-        return TurnStartedEvent(
+        turn_started_event = TurnStartedEvent(
             thread_id=params.thread_id,
             turn_id=params.turn.id,
             turn_status=_normalize_turn_status(params.turn.status),
         )
+        observe_turn_event(turn_started_event, state=state)
+        return turn_started_event
 
     if isinstance(params, TurnCompletedNotification):
         if params.turn.id != target_turn_id:
@@ -97,91 +92,80 @@ def adapt_turn_notification(
     if isinstance(params, ThreadTokenUsageUpdatedNotification):
         if params.turn_id != target_turn_id:
             return None
-        state.latest_token_usage = params.token_usage
-        return TokenUsageUpdatedEvent(
+        token_usage_event = TokenUsageUpdatedEvent(
             thread_id=params.thread_id,
             turn_id=params.turn_id,
             token_usage=params.token_usage,
         )
+        observe_turn_event(token_usage_event, state=state)
+        return token_usage_event
 
     if isinstance(params, AgentMessageDeltaNotification):
         if params.turn_id != target_turn_id:
             return None
-        state.assistant_text_fragments.append(params.delta)
-        return AgentTextDeltaEvent(
+        agent_text_delta_event = AgentTextDeltaEvent(
             thread_id=params.thread_id,
             turn_id=params.turn_id,
             item_id=params.item_id,
             text_delta=params.delta,
         )
+        observe_turn_event(agent_text_delta_event, state=state)
+        return agent_text_delta_event
 
     if isinstance(params, (ReasoningTextDeltaNotification, ReasoningSummaryTextDeltaNotification)):
         if params.turn_id != target_turn_id:
             return None
-        return ReasoningTextDeltaEvent(
+        reasoning_text_delta_event = ReasoningTextDeltaEvent(
             thread_id=params.thread_id,
             turn_id=params.turn_id,
             item_id=params.item_id,
             text_delta=params.delta,
         )
+        observe_turn_event(reasoning_text_delta_event, state=state)
+        return reasoning_text_delta_event
 
     if isinstance(params, CommandExecutionOutputDeltaNotification):
         if params.turn_id != target_turn_id:
             return None
-        return CommandOutputDeltaEvent(
+        command_output_delta_event = CommandOutputDeltaEvent(
             thread_id=params.thread_id,
             turn_id=params.turn_id,
             item_id=params.item_id,
             output_delta=params.delta,
         )
+        observe_turn_event(command_output_delta_event, state=state)
+        return command_output_delta_event
 
     if isinstance(params, ItemStartedNotification):
         if params.turn_id != target_turn_id:
             return None
-        return ItemStartedEvent(
+        item_started_event = ItemStartedEvent(
             thread_id=params.thread_id,
             turn_id=params.turn_id,
             item=params.item,
         )
+        observe_turn_event(item_started_event, state=state)
+        return item_started_event
 
     if isinstance(params, ItemCompletedNotification):
         if params.turn_id != target_turn_id:
             return None
-        return ItemCompletedEvent(
+        item_completed_event = ItemCompletedEvent(
             thread_id=params.thread_id,
             turn_id=params.turn_id,
             item=params.item,
         )
+        observe_turn_event(item_completed_event, state=state)
+        return item_completed_event
 
     if _extract_turn_id_from_typed_notification(parsed) != target_turn_id:
         return None
-    return RawNotificationEvent(
+    raw_notification_event = RawNotificationEvent(
         method=parsed.method,
         params=parsed.envelope.params if parsed.envelope.has_params else None,
     )
-
-
-def build_turn_result(
-    completion: TurnCompletedNotification,
-    *,
-    state: TurnEventAdapterState,
-) -> TurnResult:
-    """Build a compact terminal turn summary from the completion payload and adapter state."""
-
-    assistant_text = _extract_assistant_text(
-        turn_items=completion.turn.items,
-        streamed_fragments=state.assistant_text_fragments,
-    )
-    error = _turn_error_to_exception(completion.turn.error)
-    return TurnResult(
-        thread_id=completion.thread_id,
-        turn_id=completion.turn.id,
-        status=_normalize_turn_status(completion.turn.status),
-        items=tuple(completion.turn.items),
-        token_usage=state.latest_token_usage,
-        error=error,
-        assistant_text=assistant_text,
-    )
+    observe_turn_event(raw_notification_event, state=state)
+    return raw_notification_event
 
 
 def _extract_turn_id_from_typed_notification(notification: TypedServerNotification) -> str | None:
@@ -214,39 +198,6 @@ def _extract_turn_id_from_object(payload: object) -> str | None:
     return None
 
 
-def _extract_assistant_text(
-    *,
-    turn_items: Sequence[object],
-    streamed_fragments: list[str],
-) -> str | None:
-    if streamed_fragments:
-        return "".join(streamed_fragments)
-
-    item_texts: list[str] = []
-    for item in turn_items:
-        dumped_item = _model_dump_if_available(item)
-        if dumped_item is None:
-            continue
-        item_type = dumped_item.get("type")
-        item_text = dumped_item.get("text")
-        if item_type == "agentMessage" and isinstance(item_text, str):
-            item_texts.append(item_text)
-
-    if not item_texts:
-        return None
-    return "\n\n".join(item_texts)
-
-
-def _model_dump_if_available(item: object) -> dict[str, Any] | None:
-    model_dump = getattr(item, "model_dump", None)
-    if not callable(model_dump):
-        return None
-    dumped = model_dump()
-    if isinstance(dumped, dict):
-        return dumped
-    return None
-
-
 def _normalize_thread_status(status: ThreadStatus) -> str:
     raw_type = getattr(status.root, "type", None)
     if raw_type == "notLoaded":
@@ -262,12 +213,6 @@ def _normalize_turn_status(status: TurnStatus) -> str:
     if status is TurnStatus.in_progress:
         return "in_progress"
     return status.value
-
-
-def _turn_error_to_exception(turn_error: TurnError | None) -> CodexError | None:
-    if turn_error is None:
-        return None
-    return CodexError(turn_error.message)
 
 
 __all__ = [

@@ -76,7 +76,9 @@ def test_adapt_turn_notification_uses_raw_fallback_for_unadapted_target_turn_met
 
 def test_build_turn_result_and_completion_event_preserve_terminal_state() -> None:
     state = TurnEventAdapterState(
-        assistant_text_fragments=["Hello", " world"],
+        agent_text_fragments_by_item_id={"item_agent": ["Hello", " world"]},
+        item_ids_in_order=["item_agent"],
+        item_types_by_id={"item_agent": "agentMessage"},
         latest_token_usage=ThreadTokenUsage.model_validate(
             {
                 "last": {
@@ -136,6 +138,9 @@ def test_build_turn_result_and_completion_event_preserve_terminal_state() -> Non
     assert turn_result.token_usage == state.latest_token_usage
     assert turn_result.error is not None
     assert str(turn_result.error) == "tool call failed"
+    assert len(turn_result.item_aggregations) == 1
+    assert turn_result.item_aggregations[0].item_id == "item_agent"
+    assert turn_result.item_aggregations[0].agent_text == "Hello world"
 
     assert isinstance(completion_event, TurnCompletedEvent)
     assert completion_event.turn_status == "failed"
@@ -147,3 +152,52 @@ def test_build_turn_result_and_completion_event_preserve_terminal_state() -> Non
     assert completion_event.result.token_usage == turn_result.token_usage
     assert completion_event.error is not None
     assert str(completion_event.error) == "tool call failed"
+
+
+def test_build_turn_result_falls_back_to_final_turn_items_when_no_streamed_text_exists() -> None:
+    completion = TurnCompletedNotification.model_validate(
+        {
+            "threadId": "thread_123",
+            "turn": {
+                "id": "turn_123",
+                "status": "completed",
+                "items": [
+                    {
+                        "id": "item_agent_1",
+                        "text": "First answer.",
+                        "type": "agentMessage",
+                    },
+                    {
+                        "aggregatedOutput": "FAILED tests/test_example.py::test_case\n",
+                        "command": "pytest -q",
+                        "commandActions": [],
+                        "cwd": "/repo",
+                        "id": "item_command_1",
+                        "status": "completed",
+                        "type": "commandExecution",
+                    },
+                    {
+                        "id": "item_agent_2",
+                        "text": "Second answer.",
+                        "type": "agentMessage",
+                    },
+                ],
+            },
+        }
+    )
+
+    result = build_turn_result(completion, state=TurnEventAdapterState())
+
+    assert result.status == "completed"
+    assert result.assistant_text == "First answer.\n\nSecond answer."
+    assert result.command_output == "FAILED tests/test_example.py::test_case\n"
+    assert [item.item_id for item in result.item_aggregations] == [
+        "item_agent_1",
+        "item_command_1",
+        "item_agent_2",
+    ]
+    assert result.item_aggregations[0].agent_text == "First answer."
+    assert result.item_aggregations[1].command_output == (
+        "FAILED tests/test_example.py::test_case\n"
+    )
+    assert result.item_aggregations[2].agent_text == "Second answer."

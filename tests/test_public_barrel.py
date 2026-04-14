@@ -19,6 +19,8 @@ from codex_agent_sdk import (
     TurnCompletion,
     TurnEvent,
     TurnHandle,
+    TurnItemAggregation,
+    TurnOutputAggregator,
     TurnResult,
     TurnStartedEvent,
     query,
@@ -57,6 +59,8 @@ class PublicBarrelTests(unittest.TestCase):
             "TurnCompletion",
             "TurnEvent",
             "TurnHandle",
+            "TurnItemAggregation",
+            "TurnOutputAggregator",
             "TurnResult",
             "TurnStartedEvent",
             "retry_on_overload",
@@ -76,6 +80,8 @@ class PublicBarrelTests(unittest.TestCase):
         self.assertIs(OverloadRetryPolicy, retry_module.OverloadRetryPolicy)
         self.assertIs(TurnCompletion, results_module.TurnCompletion)
         self.assertIs(TurnHandle, results_module.TurnHandle)
+        self.assertIs(TurnItemAggregation, results_module.TurnItemAggregation)
+        self.assertIs(TurnOutputAggregator, results_module.TurnOutputAggregator)
         self.assertIs(TurnResult, results_module.TurnResult)
         self.assertIs(TurnStartedEvent, events_module.TurnStartedEvent)
         self.assertIs(ApprovalRequestedEvent, events_module.ApprovalRequestedEvent)
@@ -116,6 +122,7 @@ class PublicBarrelTests(unittest.TestCase):
         self.assertIn("one-shot query helper", query.__doc__ or "")
         self.assertIn("Typed approval request", ApprovalRequest.__doc__ or "")
         self.assertIn("Compact terminal summary", TurnResult.__doc__ or "")
+        self.assertIn("assembled convenience state", TurnOutputAggregator.__doc__ or "")
 
 
 if __name__ == "__main__":

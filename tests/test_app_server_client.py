@@ -34,6 +34,7 @@ from codex_agent_sdk import (
     TransportClosedError,
     TurnCompletedEvent,
     TurnCompletion,
+    TurnOutputAggregator,
     TurnStartedEvent,
     UnknownResponseIdError,
 )
@@ -1521,6 +1522,169 @@ async def test_iter_turn_events_ends_on_interrupted_completion(
 
 
 @pytest.mark.asyncio
+async def test_iter_turn_events_completion_result_preserves_multi_item_aggregations(
+    tmp_path: Path,
+) -> None:
+    first_agent_item = _build_agent_message_item_payload(
+        item_id="item_agent_1",
+        text="First answer.",
+    )
+    command_item = _build_command_execution_item_payload(
+        item_id="item_command_1",
+        aggregated_output="FAILED tests/test_example.py::test_case\n",
+    )
+    second_agent_item = _build_agent_message_item_payload(
+        item_id="item_agent_2",
+        text="Second answer.",
+    )
+    plan_item = _build_plan_item_payload(
+        item_id="item_plan_1",
+        text="Reproduce failure first.",
+    )
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        sleep_action(50),
+        send_notification(
+            "turn/started",
+            params={
+                "threadId": "thread_multi_item_stream",
+                "turn": _build_turn_payload(turn_id="turn_multi_item", status="inProgress"),
+            },
+        ),
+        send_notification(
+            "item/started",
+            params={
+                "threadId": "thread_multi_item_stream",
+                "turnId": "turn_multi_item",
+                "item": first_agent_item,
+            },
+        ),
+        send_notification(
+            "item/agentMessage/delta",
+            params={
+                "delta": "First",
+                "itemId": "item_agent_1",
+                "threadId": "thread_multi_item_stream",
+                "turnId": "turn_multi_item",
+            },
+        ),
+        send_notification(
+            "item/agentMessage/delta",
+            params={
+                "delta": " answer.",
+                "itemId": "item_agent_1",
+                "threadId": "thread_multi_item_stream",
+                "turnId": "turn_multi_item",
+            },
+        ),
+        send_notification(
+            "item/started",
+            params={
+                "threadId": "thread_multi_item_stream",
+                "turnId": "turn_multi_item",
+                "item": command_item,
+            },
+        ),
+        send_notification(
+            "item/commandExecution/outputDelta",
+            params={
+                "delta": "FAILED tests/test_example.py::test_case\n",
+                "itemId": "item_command_1",
+                "threadId": "thread_multi_item_stream",
+                "turnId": "turn_multi_item",
+            },
+        ),
+        send_notification(
+            "item/started",
+            params={
+                "threadId": "thread_multi_item_stream",
+                "turnId": "turn_multi_item",
+                "item": second_agent_item,
+            },
+        ),
+        send_notification(
+            "item/agentMessage/delta",
+            params={
+                "delta": "Second answer.",
+                "itemId": "item_agent_2",
+                "threadId": "thread_multi_item_stream",
+                "turnId": "turn_multi_item",
+            },
+        ),
+        send_notification(
+            "item/plan/delta",
+            params={
+                "delta": "Reproduce failure first.",
+                "itemId": "item_plan_1",
+                "threadId": "thread_multi_item_stream",
+                "turnId": "turn_multi_item",
+            },
+        ),
+        send_notification(
+            "turn/completed",
+            params={
+                "threadId": "thread_multi_item_stream",
+                "turn": _build_turn_payload(
+                    turn_id="turn_multi_item",
+                    status="completed",
+                    items=[
+                        first_agent_item,
+                        command_item,
+                        second_agent_item,
+                        plan_item,
+                    ],
+                ),
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="iter_turn_events_multi_item_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        events = await asyncio.wait_for(
+            _collect_async_events(
+                client.iter_turn_events(
+                    thread_id="thread_multi_item_stream",
+                    turn_id="turn_multi_item",
+                )
+            ),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+    completion_event = events[-1]
+    assert isinstance(completion_event, TurnCompletedEvent)
+    assert completion_event.result is not None
+    assert completion_event.result.assistant_text == "First answer.\n\nSecond answer."
+    assert completion_event.result.command_output == ("FAILED tests/test_example.py::test_case\n")
+    assert completion_event.result.plan_text == "Reproduce failure first."
+    assert [item.item_id for item in completion_event.result.item_aggregations] == [
+        "item_agent_1",
+        "item_command_1",
+        "item_agent_2",
+        "item_plan_1",
+    ]
+    assert completion_event.result.item_aggregations[0].agent_text == "First answer."
+    assert completion_event.result.item_aggregations[1].command_output == (
+        "FAILED tests/test_example.py::test_case\n"
+    )
+    assert completion_event.result.item_aggregations[2].agent_text == "Second answer."
+    assert completion_event.result.item_aggregations[3].plan_text == ("Reproduce failure first.")
+
+    aggregator = TurnOutputAggregator()
+    for event in events:
+        aggregator.observe(cast(Any, event))
+
+    assert aggregator.result == completion_event.result
+    assert aggregator.assistant_text == completion_event.result.assistant_text
+
+
+@pytest.mark.asyncio
 async def test_iter_turn_events_raises_if_connection_closes_before_completion(
     tmp_path: Path,
 ) -> None:
@@ -2337,11 +2501,46 @@ def _build_turn_payload(
     return payload
 
 
-def _build_agent_message_item_payload(*, item_id: str = "item_123") -> dict[str, object]:
+def _build_agent_message_item_payload(
+    *,
+    item_id: str = "item_123",
+    text: str = "Working on it.",
+) -> dict[str, object]:
     return {
         "id": item_id,
-        "text": "Working on it.",
+        "text": text,
         "type": "agentMessage",
+    }
+
+
+def _build_command_execution_item_payload(
+    *,
+    item_id: str = "item_command_123",
+    aggregated_output: str | None = None,
+    status: str = "completed",
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "command": "pytest -q",
+        "commandActions": [],
+        "cwd": "/repo",
+        "id": item_id,
+        "status": status,
+        "type": "commandExecution",
+    }
+    if aggregated_output is not None:
+        payload["aggregatedOutput"] = aggregated_output
+    return payload
+
+
+def _build_plan_item_payload(
+    *,
+    item_id: str = "item_plan_123",
+    text: str = "Reproduce failure first.",
+) -> dict[str, object]:
+    return {
+        "id": item_id,
+        "text": text,
+        "type": "plan",
     }
 
 

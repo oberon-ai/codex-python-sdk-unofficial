@@ -1,8 +1,4 @@
-"""Public turn-handle and turn-result abstractions.
-
-These placeholders reserve the high-level turn objects described by the public
-API contract while transport and routing work is still pending.
-"""
+"""Public turn-handle, aggregation, and turn-result abstractions."""
 
 from __future__ import annotations
 
@@ -10,6 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
 
+from ._turn_aggregation import TurnItemAggregation, TurnOutputAggregator, TurnResult
 from .generated.stable import ThreadTokenUsage, Turn, TurnCompletedNotification, TurnError
 
 if TYPE_CHECKING:
@@ -19,20 +16,6 @@ TurnEventIterator: TypeAlias = AsyncIterator["TurnEvent"]
 TurnWaiter: TypeAlias = Callable[[], Awaitable["TurnResult"]]
 TurnSteerer: TypeAlias = Callable[[str | list[object]], Awaitable[str]]
 TurnInterrupter: TypeAlias = Callable[[], Awaitable[None]]
-
-
-@dataclass(frozen=True, slots=True)
-class TurnResult:
-    """Compact terminal summary returned for a finished turn."""
-
-    thread_id: str
-    turn_id: str
-    status: str
-    items: tuple[object, ...] = ()
-    token_usage: object | None = None
-    error: BaseException | None = None
-    assistant_text: str | None = None
-    structured_output: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,5 +109,7 @@ class TurnHandle(AsyncIterator["TurnEvent"]):
 __all__ = [
     "TurnCompletion",
     "TurnHandle",
+    "TurnItemAggregation",
+    "TurnOutputAggregator",
     "TurnResult",
 ]
