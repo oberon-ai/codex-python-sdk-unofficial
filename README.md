@@ -23,6 +23,9 @@ The package boundary guide lives in [docs/package-layout.md](docs/package-layout
 
 The curated root import surface and import policy live in [docs/public-import-policy.md](docs/public-import-policy.md).
 
+The high-level options layering and precedence guide lives in
+[docs/codex-options.md](docs/codex-options.md).
+
 The dependency rationale and pinned repo toolchain live in [docs/dependency-policy.md](docs/dependency-policy.md).
 
 The pinned schema snapshots, refresh workflow, and stable-versus-experimental

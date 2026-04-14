@@ -52,6 +52,7 @@ class PackageLayoutTests(unittest.TestCase):
     def test_repository_support_directories_have_placeholders(self) -> None:
         expected_files = [
             REPO_ROOT / "docs" / "package-layout.md",
+            REPO_ROOT / "docs" / "codex-options.md",
             REPO_ROOT / "examples" / "README.md",
             REPO_ROOT / "scripts" / "README.md",
         ]

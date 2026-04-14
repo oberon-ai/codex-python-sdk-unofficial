@@ -69,25 +69,42 @@ The event classes below should also be public because they are part of the typed
 
 `CodexOptions` is the high-level configuration object used by `query()` and `CodexSDKClient`.
 
-It should contain stable, user-meaningful defaults that map cleanly to thread-start and turn-start settings, for example:
+It should contain stable, user-meaningful defaults that map cleanly to thread
+and turn behavior without becoming a raw mirror of every protocol field.
 
-- `model`
-- `cwd`
-- `approval_policy`
-- `sandbox_policy`
-- `approvals_reviewer`
-- `effort`
-- `summary`
-- `personality`
+Expected fields include:
+
+- shared sticky defaults:
+  - `model`
+  - `cwd`
+  - `approval_policy`
+  - `approvals_reviewer`
+  - `personality`
+  - `service_tier`
+- thread-focused defaults:
+  - `base_instructions`
+  - `developer_instructions`
+  - `sandbox_mode`
+- turn-focused defaults:
+  - `effort`
+  - `summary`
+  - `sandbox_policy`
 
 Contract notes:
 
 - Field names should be Pythonic snake_case even if the wire protocol uses camelCase.
+- `CodexOptions` should normalize user-facing strings and mappings into the generated
+  stable enum/root-model types at construction time so later client code can use typed values directly.
+- The SDK may expose helper methods on `CodexOptions` that project those stored defaults onto
+  `thread/start`, `thread/resume`, `thread/fork`, and `turn/start` kwargs.
 - Generated wire models should accept upstream camelCase keys on validation and
   emit upstream wire keys on default serialization so SDK internals do not need
   per-field alias glue.
 - Fields that are experimental upstream should not appear unless `experimental_api=True` is enabled through `AppServerConfig`.
+- `env`, `experimental_api`, and `opt_out_notification_methods` should stay off `CodexOptions`.
 - `output_schema` should not be stored on `CodexOptions`. It belongs on a single turn request.
+- `sandbox_mode` exists because thread lifecycle methods use a coarse sandbox enum,
+  while `sandbox_policy` exists because `turn/start` accepts the richer policy shape.
 
 ### `AppServerConfig`
 
@@ -118,6 +135,36 @@ Contract notes:
 - `startup_timeout` covers both subprocess launch and the initial `initialize` response wait. It is one startup budget, not two unrelated helper timeouts.
 - The low-level client performs the required handshake automatically: send `initialize`, then send `initialized`, then allow other methods.
 - Stderr from the subprocess is captured and surfaced on startup or shutdown failures instead of being swallowed.
+
+### Option Layering And Precedence
+
+Detailed examples live in [codex-options.md](codex-options.md).
+
+The intended precedence rule is:
+
+1. `AppServerConfig`
+   - process launch and handshake behavior only
+   - does not participate in thread/turn override merging
+2. client defaults
+   - `CodexSDKClient(options=...)`
+   - or `query(options=...)` for one-shot use
+3. thread lifecycle defaults
+   - `start_thread(options=...)`
+   - `resume_thread(options=...)`
+   - `fork_thread(options=...)`
+4. per-turn overrides
+   - `CodexSDKClient.query(options=..., output_schema=...)`
+
+Rules:
+
+- Later non-`None` values win over earlier non-`None` values.
+- `None` means "leave the existing default alone", not "clear the server-side sticky value".
+- `output_schema` is current-turn-only and is not part of `CodexOptions` merge state.
+- `AppServerConfig.cwd` and `AppServerConfig.env` affect the app-server subprocess,
+  while `CodexOptions.cwd` affects thread/turn execution defaults inside the protocol.
+- Because the server treats many `turn/start` overrides as sticky for subsequent turns,
+  later high-level client code should update its effective defaults after successful thread
+  lifecycle calls and turn starts instead of recomputing from stale client-constructor values.
 
 ### `OverloadRetryPolicy` and `retry_on_overload()`
 
@@ -258,6 +305,7 @@ Contract notes:
 
 - These methods return the active `thread_id` and also update `client.thread_id`.
 - `fork_thread()` defaults to the current thread when `thread_id` is omitted.
+- `options=` overlays the client's stored `CodexOptions` using last non-`None` precedence.
 - The stateful client should not silently auto-start a thread inside `query()`. Callers should either use `query()` for the hidden-thread convenience path or call `start_thread()` / `resume_thread()` / `fork_thread()` explicitly.
 
 ### Turn lifecycle methods
@@ -289,6 +337,8 @@ Contract notes:
 
 - `query()` starts a new turn on the current thread and returns a `TurnHandle` immediately after the app-server acknowledges `turn/start`.
 - `query()` requires an active thread. If there is no current thread, it raises a specific client-state error instead of auto-starting one.
+- `options=` overlays the client's current sticky `CodexOptions` for that turn start only,
+  while `output_schema` remains a separate current-turn-only argument.
 - Only one high-level active turn may exist per `CodexSDKClient` in v1.
 - `steer()` appends input to the currently active regular turn and returns the accepted `turn_id`.
 - `interrupt()` requests cancellation and callers should wait for `TurnCompletedEvent(status="interrupted")` before treating the turn as finished.
