@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import math
 import unittest
 
 from codex_agent_sdk import MessageDecodeError
-from codex_agent_sdk.rpc import parse_jsonrpc_envelope
+from codex_agent_sdk.rpc import parse_jsonrpc_envelope, serialize_jsonrpc_envelope
 
 
 class ParseJsonRpcEnvelopeTests(unittest.TestCase):
@@ -32,6 +33,24 @@ class ParseJsonRpcEnvelopeTests(unittest.TestCase):
         error = exc_info.exception
         self.assertIsInstance(error.original_error, ValueError)
         self.assertEqual(error.line, '["not","an","object"]')
+
+    def test_serialize_jsonrpc_envelope_emits_compact_json(self) -> None:
+        line = serialize_jsonrpc_envelope(
+            {
+                "id": 7,
+                "method": "thread/start",
+                "params": {"cwd": ".", "includeHidden": False},
+            }
+        )
+
+        self.assertEqual(
+            line,
+            '{"id":7,"method":"thread/start","params":{"cwd":".","includeHidden":false}}',
+        )
+
+    def test_serialize_jsonrpc_envelope_rejects_nan_values(self) -> None:
+        with self.assertRaises(ValueError):
+            serialize_jsonrpc_envelope({"id": 1, "params": {"value": math.nan}})
 
 
 if __name__ == "__main__":

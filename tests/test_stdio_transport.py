@@ -15,6 +15,7 @@ from codex_agent_sdk import (
     StartupError,
     StartupTimeoutError,
     TransportClosedError,
+    TransportWriteError,
 )
 from codex_agent_sdk.options import AppServerConfig
 from codex_agent_sdk.transport import StdioTransport
@@ -361,6 +362,230 @@ async def test_read_stdout_line_raises_decode_error_when_frame_exceeds_limit(
     assert isinstance(error.original_error, ValueError)
     assert "exceeded 32 bytes" in str(error.original_error)
     assert error.line.startswith('{"payload":"')
+
+
+@pytest.mark.asyncio
+async def test_write_stdin_envelope_writes_one_compact_jsonl_frame(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_executable_script(
+        tmp_path / "stdin_reader_codex.py",
+        """
+        import sys
+
+        sys.stdin.read()
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script)))
+
+    async with transport:
+        stdin = transport.stdin
+        assert stdin is not None
+
+        writes: list[bytes] = []
+        drain_calls = 0
+        writer_type = type(stdin)
+        original_write = writer_type.write
+        original_drain = writer_type.drain
+
+        def recording_write(
+            self: asyncio.StreamWriter,
+            data: bytes | bytearray | memoryview,
+        ) -> None:
+            nonlocal writes
+            if self is stdin:
+                writes.append(bytes(data))
+            original_write(self, data)
+
+        async def recording_drain(self: asyncio.StreamWriter) -> None:
+            nonlocal drain_calls
+            if self is stdin:
+                drain_calls += 1
+            await original_drain(self)
+
+        monkeypatch.setattr(writer_type, "write", recording_write)
+        monkeypatch.setattr(writer_type, "drain", recording_drain)
+
+        await transport.write_stdin_envelope(
+            {
+                "id": 1,
+                "method": "thread/start",
+                "params": {"cwd": ".", "includeHidden": False},
+            }
+        )
+
+    assert writes == [
+        b'{"id":1,"method":"thread/start","params":{"cwd":".","includeHidden":false}}\n'
+    ]
+    assert drain_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_write_stdin_envelope_serializes_concurrent_callers_until_first_drain_finishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_executable_script(
+        tmp_path / "stdin_reader_codex.py",
+        """
+        import sys
+
+        sys.stdin.read()
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script)))
+
+    first_frame = b'{"id":1,"method":"thread/start"}\n'
+    second_frame = b'{"id":2,"method":"turn/start"}\n'
+
+    async with transport:
+        stdin = transport.stdin
+        assert stdin is not None
+
+        writes: list[bytes] = []
+        drain_calls = 0
+        first_drain_started = asyncio.Event()
+        release_first_drain = asyncio.Event()
+        writer_type = type(stdin)
+        original_write = writer_type.write
+        original_drain = writer_type.drain
+
+        def recording_write(
+            self: asyncio.StreamWriter,
+            data: bytes | bytearray | memoryview,
+        ) -> None:
+            if self is stdin:
+                writes.append(bytes(data))
+            original_write(self, data)
+
+        async def gated_drain(self: asyncio.StreamWriter) -> None:
+            nonlocal drain_calls
+            if self is stdin:
+                drain_calls += 1
+                if drain_calls == 1:
+                    first_drain_started.set()
+                    await release_first_drain.wait()
+            await original_drain(self)
+
+        monkeypatch.setattr(writer_type, "write", recording_write)
+        monkeypatch.setattr(writer_type, "drain", gated_drain)
+
+        first_task = asyncio.create_task(
+            transport.write_stdin_envelope({"id": 1, "method": "thread/start"})
+        )
+        await asyncio.wait_for(first_drain_started.wait(), timeout=IO_TIMEOUT_SECONDS)
+
+        second_task = asyncio.create_task(
+            transport.write_stdin_envelope({"id": 2, "method": "turn/start"})
+        )
+        await asyncio.sleep(0.05)
+
+        assert writes == [first_frame]
+
+        release_first_drain.set()
+        await asyncio.gather(first_task, second_task)
+
+    assert writes == [first_frame, second_frame]
+    assert drain_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_write_stdin_envelope_raises_after_transport_close(tmp_path: Path) -> None:
+    script = _write_executable_script(
+        tmp_path / "stdin_reader_codex.py",
+        """
+        import sys
+
+        sys.stdin.read()
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script)))
+
+    await transport.start()
+    await transport.close()
+
+    with pytest.raises(TransportWriteError) as exc_info:
+        await transport.write_stdin_envelope({"id": 1, "method": "thread/start"})
+
+    assert "after transport close" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_write_stdin_envelope_raises_after_process_exit(tmp_path: Path) -> None:
+    script = _write_executable_script(
+        tmp_path / "exiting_codex.py",
+        """
+        import sys
+        import time
+
+        time.sleep(0.3)
+        sys.stderr.write("writer target exited\\n")
+        sys.stderr.flush()
+        raise SystemExit(9)
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script)))
+
+    async with transport:
+        process = transport.process
+        assert process is not None
+        await asyncio.wait_for(process.wait(), timeout=IO_TIMEOUT_SECONDS)
+
+        with pytest.raises(TransportWriteError) as exc_info:
+            await transport.write_stdin_envelope({"id": 1, "method": "thread/start"})
+
+    error = exc_info.value
+    assert error.exit_code == 9
+    assert error.stderr_tail is not None
+    assert "writer target exited" in error.stderr_tail
+    assert "after process exit" in str(error)
+
+
+@pytest.mark.asyncio
+async def test_write_stdin_envelope_cancellation_during_drain_closes_transport(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_executable_script(
+        tmp_path / "stdin_reader_codex.py",
+        """
+        import sys
+
+        sys.stdin.read()
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script)))
+
+    async with transport:
+        stdin = transport.stdin
+        assert stdin is not None
+
+        drain_entered = asyncio.Event()
+        writer_type = type(stdin)
+        original_drain = writer_type.drain
+
+        async def stalled_drain(self: asyncio.StreamWriter) -> None:
+            if self is stdin:
+                drain_entered.set()
+                await asyncio.Event().wait()
+            await original_drain(self)
+
+        monkeypatch.setattr(writer_type, "drain", stalled_drain)
+
+        write_task = asyncio.create_task(
+            transport.write_stdin_envelope({"id": 1, "method": "thread/start"})
+        )
+        await asyncio.wait_for(drain_entered.wait(), timeout=IO_TIMEOUT_SECONDS)
+        write_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await write_task
+
+        assert transport.process is None
+
+        with pytest.raises(TransportWriteError):
+            await transport.write_stdin_envelope({"id": 2, "method": "turn/start"})
 
 
 def _write_executable_script(path: Path, body: str) -> Path:

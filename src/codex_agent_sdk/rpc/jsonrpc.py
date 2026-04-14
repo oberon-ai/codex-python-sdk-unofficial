@@ -46,7 +46,26 @@ def parse_jsonrpc_envelope(
     return cast(JsonRpcEnvelope, parsed)
 
 
+def serialize_jsonrpc_envelope(envelope: JsonRpcEnvelope) -> str:
+    """Serialize one raw JSON-RPC envelope to compact JSON text.
+
+    The transport layer owns appending the trailing JSONL newline. This helper
+    only guarantees stable compact JSON output for one top-level envelope object.
+    """
+
+    if not isinstance(envelope, dict):
+        raise ValueError("JSON-RPC envelope must be a JSON object")
+
+    return json.dumps(
+        envelope,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
 __all__ = [
     "JsonRpcEnvelope",
     "parse_jsonrpc_envelope",
+    "serialize_jsonrpc_envelope",
 ]

@@ -106,8 +106,24 @@ class TransportClosedError(TransportError):
 class TransportWriteError(TransportError):
     """Raised when writing to the app-server transport fails or becomes unsafe."""
 
-    def __init__(self, message: str = "failed to write request to app-server transport") -> None:
-        super().__init__(message)
+    def __init__(
+        self,
+        message: str = "failed to write request to app-server transport",
+        *,
+        stderr_tail: str | None = None,
+        exit_code: int | None = None,
+        original_error: BaseException | None = None,
+    ) -> None:
+        self.stderr_tail = stderr_tail
+        self.exit_code = exit_code
+        self.original_error = original_error
+        super().__init__(
+            _compose_message(
+                message,
+                stderr_tail=stderr_tail,
+                exit_code=exit_code,
+            )
+        )
 
 
 class MessageDecodeError(TransportError):

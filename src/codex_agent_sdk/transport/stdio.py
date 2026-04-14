@@ -17,9 +17,11 @@ from ..errors import (
     StartupError,
     StartupTimeoutError,
     TransportClosedError,
+    TransportError,
+    TransportWriteError,
 )
 from ..options import AppServerConfig
-from ..rpc import JsonRpcEnvelope, parse_jsonrpc_envelope
+from ..rpc import JsonRpcEnvelope, parse_jsonrpc_envelope, serialize_jsonrpc_envelope
 
 APP_SERVER_SUBCOMMAND = "app-server"
 DEFAULT_CODEX_BIN = "codex"
@@ -69,6 +71,7 @@ class StdioTransport:
         self._stdout_max_frame_bytes = stdout_max_frame_bytes
         self._stdout_read_chunk_bytes = stdout_read_chunk_bytes
         self._stdout_read_lock = asyncio.Lock()
+        self._stdin_write_lock = asyncio.Lock()
 
     async def __aenter__(self) -> StdioTransport:
         await self.start()
@@ -264,6 +267,30 @@ class StdioTransport:
             return None
         return parse_jsonrpc_envelope(line, stderr_tail=self.stderr_tail)
 
+    async def write_stdin_envelope(self, envelope: JsonRpcEnvelope) -> None:
+        """Serialize and flush one JSON-RPC envelope to stdin as exactly one frame."""
+
+        frame = _encode_stdin_frame(envelope)
+
+        async with self._stdin_write_lock:
+            stdin = self._require_stdin_for_write_locked()
+
+            try:
+                stdin.write(frame)
+                await stdin.drain()
+            except asyncio.CancelledError:
+                await asyncio.shield(self._close_after_write_failure())
+                raise
+            except (BrokenPipeError, ConnectionResetError, OSError, RuntimeError) as exc:
+                error = TransportWriteError(
+                    "failed to write JSON-RPC envelope to app-server stdin",
+                    stderr_tail=self.stderr_tail,
+                    exit_code=self.returncode,
+                    original_error=exc,
+                )
+                await self._close_after_write_failure()
+                raise error from exc
+
     async def close(self) -> None:
         """Terminate the subprocess and wait for local cleanup."""
 
@@ -354,6 +381,35 @@ class StdioTransport:
 
         await self._await_stderr_task(stderr_task)
 
+    def _require_stdin_for_write_locked(self) -> asyncio.StreamWriter:
+        process = self._process
+        if process is None:
+            raise TransportWriteError(
+                "cannot write to app-server stdin after transport close",
+                stderr_tail=self.stderr_tail,
+                exit_code=self.returncode,
+            )
+        if process.returncode is not None:
+            self._last_returncode = process.returncode
+            raise TransportWriteError(
+                "cannot write to app-server stdin after process exit",
+                stderr_tail=self.stderr_tail,
+                exit_code=process.returncode,
+            )
+
+        stdin = process.stdin
+        if stdin is None or stdin.is_closing():
+            raise TransportWriteError(
+                "app-server stdin is not available for writing",
+                stderr_tail=self.stderr_tail,
+                exit_code=self.returncode,
+            )
+        return stdin
+
+    async def _close_after_write_failure(self) -> None:
+        with suppress(TransportError, OSError, RuntimeError):
+            await self.close()
+
     async def _read_stdout_frame_locked(self) -> bytes | None:
         stdout = self.stdout
         if stdout is None:
@@ -428,6 +484,10 @@ def _decode_stdout_frame(frame: bytes, *, stderr_tail: str | None) -> str:
 
 def _decode_frame_preview(frame: bytes) -> str:
     return frame[:160].decode("utf-8", errors="replace")
+
+
+def _encode_stdin_frame(envelope: JsonRpcEnvelope) -> bytes:
+    return (serialize_jsonrpc_envelope(envelope) + "\n").encode("utf-8")
 
 
 __all__ = [

@@ -23,6 +23,7 @@ from codex_agent_sdk import (
     ShutdownTimeoutError,
     StartupError,
     StartupTimeoutError,
+    TransportWriteError,
     is_retryable_error,
     map_jsonrpc_error,
 )
@@ -126,6 +127,21 @@ class ExceptionStructureTests(unittest.TestCase):
         self.assertEqual(error.method, "turn/start")
         self.assertEqual(error.payload, {"turn": None})
         self.assertIn("turn/start", str(error))
+
+    def test_transport_write_error_preserves_context(self) -> None:
+        original = BrokenPipeError("broken pipe")
+        error = TransportWriteError(
+            "failed to write request to app-server transport",
+            stderr_tail="transport stderr",
+            exit_code=13,
+            original_error=original,
+        )
+
+        self.assertIs(error.original_error, original)
+        self.assertEqual(error.exit_code, 13)
+        self.assertEqual(error.stderr_tail, "transport stderr")
+        self.assertIn("exit_code=13", str(error))
+        self.assertIn("transport stderr", str(error))
 
 
 if __name__ == "__main__":
