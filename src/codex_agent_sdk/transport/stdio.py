@@ -22,7 +22,7 @@ from ..errors import (
     TransportWriteError,
 )
 from ..options import AppServerConfig
-from ..rpc import JsonRpcEnvelope, parse_jsonrpc_envelope, serialize_jsonrpc_envelope
+from ..rpc.jsonrpc import JsonRpcEnvelope, parse_jsonrpc_envelope, serialize_jsonrpc_envelope
 
 APP_SERVER_SUBCOMMAND = "app-server"
 DEFAULT_CODEX_BIN = "codex"
@@ -198,8 +198,13 @@ class StdioTransport:
         process = self._process
         return process is not None and process.returncode is None
 
-    async def start(self) -> StdioTransport:
-        """Launch the subprocess and retain ownership of its stdio pipes."""
+    async def start(self, *, timeout: float | None = None) -> StdioTransport:
+        """Launch the subprocess and retain ownership of its stdio pipes.
+
+        ``timeout`` overrides ``AppServerConfig.startup_timeout`` for this launch
+        attempt so higher layers can spend one shared startup budget across
+        subprocess spawn and the first protocol round-trip.
+        """
 
         close_task = self._close_task
         if close_task is not None:
@@ -218,6 +223,8 @@ class StdioTransport:
         self._stdout_buffer.clear()
         self._stdout_eof = False
 
+        startup_timeout = self.config.startup_timeout if timeout is None else timeout
+
         try:
             process = await asyncio.wait_for(
                 asyncio.create_subprocess_exec(
@@ -228,11 +235,11 @@ class StdioTransport:
                     cwd=cwd,
                     env=env,
                 ),
-                timeout=self.config.startup_timeout,
+                timeout=startup_timeout,
             )
         except TimeoutError as exc:
             raise StartupTimeoutError(
-                timeout_seconds=self.config.startup_timeout,
+                timeout_seconds=startup_timeout,
                 command=command,
                 cwd=cwd,
             ) from exc
@@ -269,7 +276,11 @@ class StdioTransport:
         )
 
         try:
-            await self._probe_for_early_exit(command=command, cwd=cwd)
+            await self._probe_for_early_exit(
+                command=command,
+                cwd=cwd,
+                startup_timeout=startup_timeout,
+            )
         except BaseException:
             await self._cleanup_failed_start()
             raise
@@ -355,8 +366,9 @@ class StdioTransport:
         *,
         command: tuple[str, ...],
         cwd: str | None,
+        startup_timeout: float,
     ) -> None:
-        grace_period = min(self.config.startup_timeout, STARTUP_EXIT_GRACE_PERIOD_SECONDS)
+        grace_period = min(startup_timeout, STARTUP_EXIT_GRACE_PERIOD_SECONDS)
         process = self._process
         if process is None:
             return

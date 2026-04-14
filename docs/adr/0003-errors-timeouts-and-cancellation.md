@@ -126,6 +126,8 @@ The SDK defines these default local timeouts:
    startup and shutdown.
 4. Everything tied to model execution, human approval, or long-running work waits
    indefinitely unless the caller opts into a deadline.
+5. Explicit connection close releases pending request waiters immediately instead of
+   leaving them blocked behind transport shutdown.
 
 ## Cancellation Semantics
 
@@ -159,6 +161,14 @@ If a caller cancels while awaiting a request result after the request has been w
 
 Later implementation should use `asyncio.shield(...)` around the connection-owned future
 so cancelling one caller does not cancel the shared correlation state.
+
+If the connection closes or fails before the response arrives:
+
+- every pending request waiter is released immediately
+- explicit caller-driven close maps to `TransportClosedError`
+- unexpected EOF after startup also maps to `TransportClosedError`
+- raw notification and server-request iterators stop on explicit close and raise the
+  terminal connection error on failure
 
 ### Turn event consumption
 

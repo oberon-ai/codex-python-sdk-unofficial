@@ -98,6 +98,7 @@ Contract notes:
 
 - `experimental_api` defaults to `False`.
 - `AppServerConfig.cwd` controls the app-server process working directory and is distinct from `CodexOptions.cwd`, which is a per-thread or per-turn workspace override.
+- `startup_timeout` covers both subprocess launch and the initial `initialize` response wait. It is one startup budget, not two unrelated helper timeouts.
 - The low-level client performs the required handshake automatically: send `initialize`, then send `initialized`, then allow other methods.
 - Stderr from the subprocess is captured and surfaced on startup or shutdown failures instead of being swallowed.
 
@@ -345,7 +346,13 @@ Contract notes:
 ```python
 class AppServerClient:
     async def initialize(self) -> InitializeResult: ...
-    async def request(self, method: str, params: object | None = None) -> object: ...
+    async def request(
+        self,
+        method: str,
+        params: object | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> object: ...
     async def notify(self, method: str, params: object | None = None) -> None: ...
     def iter_notifications(self) -> AsyncIterator[JSONRPCNotification]: ...
     def iter_server_requests(self) -> AsyncIterator[JSONRPCRequest]: ...
@@ -373,6 +380,10 @@ Design notes:
 
 - `initialize()` performs the full required handshake and returns the initialize result after the `initialized` notification has already been sent.
 - `request()` and `notify()` are raw escape hatches.
+- `request(timeout=...)` is a local wait deadline only. A request timeout does not imply that the server abandoned the work, and it does not close the connection.
+- Raw notification and server-request iterators wait indefinitely by default. Callers who want an idle deadline should wrap `anext(...)` or the async iterator in `asyncio.timeout(...)`.
+- Explicit `close()` releases any pending request waiters with a connection-closed error and ends the raw inbound iterators cleanly.
+- Unexpected EOF after startup is treated as connection failure. Pending request waiters receive `TransportClosedError`, and raw inbound iterators raise the same failure once queued items are drained.
 - The typed helpers above should cover the stable app-server methods needed by the v1 high-level client.
 - Experimental methods and fields remain unavailable unless `AppServerConfig(experimental_api=True)` was used.
 

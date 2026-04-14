@@ -1,0 +1,232 @@
+from __future__ import annotations
+
+import asyncio
+import sys
+import textwrap
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+import pytest
+
+from codex_agent_sdk import (
+    AppServerClient,
+    AppServerConfig,
+    RequestTimeoutError,
+    StartupTimeoutError,
+    TransportClosedError,
+)
+from codex_agent_sdk.testing import (
+    FakeAppServerScript,
+    close_connection,
+    expect_notification,
+    expect_request,
+    send_response,
+    sleep_action,
+)
+
+IO_TIMEOUT_SECONDS = 1.0
+FAKE_SERVER_MODULE = "codex_agent_sdk.testing.fake_app_server"
+
+
+@pytest.mark.asyncio
+async def test_initialize_uses_shared_startup_budget_for_initialize_response(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        sleep_action(120),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+    )
+    launcher = _write_fake_codex_launcher(tmp_path, script)
+    client = AppServerClient(
+        AppServerConfig(
+            codex_bin=str(launcher),
+            startup_timeout=0.05,
+        )
+    )
+
+    try:
+        with pytest.raises(StartupTimeoutError) as exc_info:
+            await client.initialize()
+    finally:
+        await client.close()
+
+    assert exc_info.value.timeout_seconds == 0.05
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_is_local_and_connection_remains_usable(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request("thread/start", save_as="thread_start", params={"ephemeral": True}),
+        sleep_action(120),
+        send_response(request_ref="thread_start", result={"threadId": "thread_slow"}),
+        expect_request(
+            "thread/resume",
+            save_as="thread_resume",
+            params={"threadId": "thread_slow"},
+        ),
+        send_response(
+            request_ref="thread_resume",
+            result={"threadId": "thread_slow", "status": "resumed"},
+        ),
+    )
+    launcher = _write_fake_codex_launcher(tmp_path, script)
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        initialize_result = await client.initialize()
+        assert initialize_result == {"protocolVersion": 2}
+
+        with pytest.raises(RequestTimeoutError) as exc_info:
+            await client.request("thread/start", {"ephemeral": True}, timeout=0.05)
+
+        assert exc_info.value.method == "thread/start"
+        assert exc_info.value.request_id == 2
+
+        await asyncio.sleep(0.15)
+        resumed = await client.request(
+            "thread/resume",
+            {"threadId": "thread_slow"},
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+    assert resumed == {"threadId": "thread_slow", "status": "resumed"}
+
+
+@pytest.mark.asyncio
+async def test_unexpected_eof_releases_pending_request_waiter(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request("thread/start", params={"ephemeral": False}),
+        close_connection(),
+    )
+    launcher = _write_fake_codex_launcher(tmp_path, script)
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+
+        with pytest.raises(TransportClosedError) as exc_info:
+            await asyncio.wait_for(
+                client.request("thread/start", {"ephemeral": False}),
+                timeout=IO_TIMEOUT_SECONDS,
+            )
+
+    assert "EOF" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_explicit_close_releases_pending_request_waiter(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request("thread/start", params={"ephemeral": False}),
+        sleep_action(300),
+    )
+    launcher = _write_fake_codex_launcher(tmp_path, script)
+    client = AppServerClient(AppServerConfig(codex_bin=str(launcher)))
+
+    try:
+        await client.initialize()
+        request_task = asyncio.create_task(client.request("thread/start", {"ephemeral": False}))
+        await asyncio.sleep(0.05)
+        await client.close()
+
+        with pytest.raises(TransportClosedError) as exc_info:
+            await asyncio.wait_for(request_task, timeout=IO_TIMEOUT_SECONDS)
+    finally:
+        await client.close()
+
+    assert "closed before request completion" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_notification_iterator_wakes_on_close_and_failure(tmp_path: Path) -> None:
+    close_script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        sleep_action(300),
+    )
+    eof_script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        close_connection(),
+    )
+
+    close_launcher = _write_fake_codex_launcher(tmp_path, close_script, stem="close_launcher.py")
+    eof_launcher = _write_fake_codex_launcher(tmp_path, eof_script, stem="eof_launcher.py")
+
+    close_client = AppServerClient(AppServerConfig(codex_bin=str(close_launcher)))
+    try:
+        await close_client.initialize()
+        notifications = close_client.iter_notifications()
+        close_task: asyncio.Task[object] = asyncio.create_task(
+            _read_next_notification(notifications)
+        )
+        await asyncio.sleep(0.05)
+        await close_client.close()
+
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(close_task, timeout=IO_TIMEOUT_SECONDS)
+    finally:
+        await close_client.close()
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(eof_launcher))) as eof_client:
+        await eof_client.initialize()
+        notifications = eof_client.iter_notifications()
+
+        with pytest.raises(TransportClosedError):
+            await asyncio.wait_for(anext(notifications), timeout=IO_TIMEOUT_SECONDS)
+
+
+def _write_fake_codex_launcher(
+    tmp_path: Path,
+    script: FakeAppServerScript,
+    *,
+    stem: str = "fake_codex.py",
+) -> Path:
+    script_path = tmp_path / f"{Path(stem).stem}.script.jsonl"
+    launcher_path = tmp_path / stem
+    script.write_jsonl(script_path)
+    return _write_executable_script(
+        launcher_path,
+        f"""
+        import os
+        import sys
+
+        os.execv(
+            sys.executable,
+            [
+                sys.executable,
+                "-m",
+                "{FAKE_SERVER_MODULE}",
+                "--script",
+                {str(script_path)!r},
+            ],
+        )
+        """,
+    )
+
+
+def _write_executable_script(path: Path, body: str) -> Path:
+    script = "\n".join(
+        [
+            f"#!{sys.executable}",
+            textwrap.dedent(body).strip(),
+            "",
+        ]
+    )
+    path.write_text(script, encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+async def _read_next_notification(notifications: AsyncIterator[object]) -> object:
+    return await anext(notifications)

@@ -7,13 +7,22 @@ later tasks, but the public names live here from the start.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
 from .approvals import ApprovalHandler
+from .errors import (
+    AlreadyInitializedError,
+    NotInitializedError,
+    RequestTimeoutError,
+    StartupTimeoutError,
+)
 from .events import TurnEvent
 from .options import AppServerConfig, CodexOptions
 from .results import TurnHandle
+from .rpc.connection import JsonRpcConnection
+from .transport import StdioTransport
 
 
 class AppServerClient:
@@ -21,6 +30,10 @@ class AppServerClient:
 
     def __init__(self, config: AppServerConfig | None = None) -> None:
         self.config = config or AppServerConfig()
+        self._connection = JsonRpcConnection(StdioTransport(self.config))
+        self._initialize_lock = asyncio.Lock()
+        self._initialized = False
+        self._initialize_result: object | None = None
 
     async def __aenter__(self) -> AppServerClient:
         return self
@@ -36,60 +49,117 @@ class AppServerClient:
     async def close(self) -> None:
         """Close the underlying app-server connection."""
 
+        await self._connection.close()
+
     async def initialize(self) -> object:
         """Perform the required initialize then initialized handshake."""
 
-        raise NotImplementedError("App-server initialization is not implemented yet.")
+        if self._initialized:
+            raise AlreadyInitializedError(-32002, "Already initialized", method="initialize")
 
-    async def request(self, method: str, params: object | None = None) -> object:
+        async with self._initialize_lock:
+            if self._initialized:
+                raise AlreadyInitializedError(-32002, "Already initialized", method="initialize")
+
+            deadline = asyncio.get_running_loop().time() + self.config.startup_timeout
+            try:
+                await self._connection.start(
+                    startup_timeout=_remaining_startup_timeout(
+                        deadline=deadline,
+                        config=self.config,
+                        stderr_tail=self._connection.transport.stderr_tail,
+                    )
+                )
+                initialize_result = await self._connection.request(
+                    "initialize",
+                    _build_initialize_params(self.config),
+                    timeout=_remaining_startup_timeout(
+                        deadline=deadline,
+                        config=self.config,
+                        stderr_tail=self._connection.transport.stderr_tail,
+                    ),
+                )
+                await self._connection.notify("initialized", {})
+            except RequestTimeoutError as exc:
+                await self._connection.close()
+                raise StartupTimeoutError(
+                    timeout_seconds=self.config.startup_timeout,
+                    stderr_tail=self._connection.transport.stderr_tail,
+                    command=self._connection.transport.command,
+                    cwd=self._connection.transport.cwd,
+                ) from exc
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                await self._connection.close()
+                raise
+
+            self._initialized = True
+            self._initialize_result = initialize_result
+            return initialize_result
+
+    async def request(
+        self,
+        method: str,
+        params: object | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> object:
         """Send a raw JSON-RPC request over the app-server connection."""
 
-        raise NotImplementedError("Raw JSON-RPC requests are not implemented yet.")
+        self._require_initialized()
+        return await self._connection.request(method, params, timeout=timeout)
 
     async def notify(self, method: str, params: object | None = None) -> None:
         """Send a raw JSON-RPC notification over the app-server connection."""
 
-        raise NotImplementedError("Raw JSON-RPC notifications are not implemented yet.")
+        self._require_initialized()
+        await self._connection.notify(method, params)
 
     def iter_notifications(self) -> AsyncIterator[object]:
         """Iterate raw JSON-RPC notifications from the server."""
 
-        raise NotImplementedError("Notification streaming is not implemented yet.")
+        return self._connection.iter_notifications()
 
     def iter_server_requests(self) -> AsyncIterator[object]:
         """Iterate raw server-initiated JSON-RPC requests."""
 
-        raise NotImplementedError("Server-request streaming is not implemented yet.")
+        return self._connection.iter_server_requests()
 
     async def thread_start(self, **params: Any) -> object:
         """Start a new app-server thread."""
 
-        raise NotImplementedError("Thread start helpers are not implemented yet.")
+        return await self.request("thread/start", params or None)
 
     async def thread_resume(self, **params: Any) -> object:
         """Resume an existing app-server thread."""
 
-        raise NotImplementedError("Thread resume helpers are not implemented yet.")
+        return await self.request("thread/resume", params or None)
 
     async def thread_fork(self, **params: Any) -> object:
         """Fork an app-server thread."""
 
-        raise NotImplementedError("Thread fork helpers are not implemented yet.")
+        return await self.request("thread/fork", params or None)
 
     async def turn_start(self, **params: Any) -> object:
         """Start a turn on the active thread."""
 
-        raise NotImplementedError("Turn start helpers are not implemented yet.")
+        return await self.request("turn/start", params or None)
 
     async def turn_steer(self, **params: Any) -> object:
         """Steer an in-flight turn."""
 
-        raise NotImplementedError("Turn steering helpers are not implemented yet.")
+        return await self.request("turn/steer", params or None)
 
     async def turn_interrupt(self, **params: Any) -> None:
         """Interrupt an in-flight turn."""
 
-        raise NotImplementedError("Turn interruption helpers are not implemented yet.")
+        await self.request("turn/interrupt", params or None)
+
+    def _require_initialized(self) -> None:
+        if self._initialized:
+            return
+        raise NotInitializedError(-32002, "Not initialized")
 
 
 class CodexSDKClient:
@@ -206,3 +276,34 @@ __all__ = [
     "AppServerClient",
     "CodexSDKClient",
 ]
+
+
+def _build_initialize_params(config: AppServerConfig) -> dict[str, object]:
+    params: dict[str, object] = {
+        "clientInfo": {
+            "name": config.client_name,
+            "title": config.client_title,
+            "version": config.client_version,
+        },
+        "protocolVersion": 2,
+    }
+    if config.experimental_api:
+        params["experimentalApi"] = True
+    return params
+
+
+def _remaining_startup_timeout(
+    *,
+    deadline: float,
+    config: AppServerConfig,
+    stderr_tail: str | None,
+) -> float:
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining > 0:
+        return remaining
+    raise StartupTimeoutError(
+        timeout_seconds=config.startup_timeout,
+        stderr_tail=stderr_tail,
+        command=StdioTransport.build_command(config),
+        cwd=config.cwd,
+    )
