@@ -11,6 +11,7 @@ The current codegen step is intentionally narrow:
   `tests/fixtures/schema_snapshots/stable/codex_app_server_protocol.v2.stable.schemas.json`
 - output:
   `src/codex_agent_sdk/generated/stable.py`
+  `src/codex_agent_sdk/generated/stable_notification_registry.py`
 - generator:
   `datamodel-code-generator==0.56.0`
 
@@ -22,6 +23,9 @@ tasks:
 - response payloads such as `ThreadStartResponse` and `TurnStartResponse`
 - server notifications such as `ServerNotification`,
   `ThreadStartedNotification`, and `TurnStartedNotification`
+- a generated stable notification registry that maps exact method names such as
+  `thread/started` and `item/agentMessage/delta` to their generated payload
+  models
 - shared wire payloads such as `Thread`, `Turn`, `ThreadItem`, `UserInput`,
   and `AskForApproval`
 
@@ -77,6 +81,11 @@ Regenerate the checked-in stable models:
 python scripts/generate_protocol_models.py
 ```
 
+That one command refreshes both:
+
+- `src/codex_agent_sdk/generated/stable.py`
+- `src/codex_agent_sdk/generated/stable_notification_registry.py`
+
 Verify that the checked-in generated file is in sync:
 
 ```bash
@@ -99,4 +108,6 @@ server-request union for approval or user-input requests. Those server-initiated
 requests therefore remain routed as raw `JsonRpcRequest` envelopes in the `rpc/`
 layer for now. The generated stable module still covers the schema-defined
 request params, responses, notifications, and shared payload types that later
-adapter layers need.
+adapter layers need, while the separate generated notification registry gives
+the handwritten `protocol.registries` layer an easy-to-refresh method-to-model
+index without hand-maintaining wrapper-class names.

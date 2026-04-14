@@ -24,6 +24,7 @@ class PackageLayoutTests(unittest.TestCase):
             "codex_agent_sdk.rpc.router",
             "codex_agent_sdk.generated",
             "codex_agent_sdk.generated.stable",
+            "codex_agent_sdk.generated.stable_notification_registry",
             "codex_agent_sdk.protocol",
             "codex_agent_sdk.protocol.pydantic",
             "codex_agent_sdk.protocol.registries",
