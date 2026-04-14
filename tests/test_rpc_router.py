@@ -35,6 +35,19 @@ async def test_request_id_allocator_is_incrementing_and_observes_manual_ids() ->
 
 
 @pytest.mark.asyncio
+async def test_registry_observes_remote_request_ids_for_future_allocations() -> None:
+    registry = JsonRpcRequestRegistry()
+
+    first = await registry.register_request("initialize")
+    assert first.request_id == 1
+
+    await registry.observe_remote_request_id(7)
+
+    second = await registry.register_request("thread/start")
+    assert second.request_id == 8
+
+
+@pytest.mark.asyncio
 async def test_registry_resolves_multiple_outstanding_requests_out_of_order() -> None:
     registry = JsonRpcRequestRegistry()
     first = await registry.register_request("thread/start")

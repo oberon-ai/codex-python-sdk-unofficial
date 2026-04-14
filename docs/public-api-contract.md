@@ -382,6 +382,25 @@ class AppServerClient:
         max_queue_size: int | None = None,
     ) -> JsonRpcNotificationSubscription: ...
     def iter_server_requests(self) -> AsyncIterator[JsonRpcRequest]: ...
+    async def respond_server_request(
+        self,
+        request_id: JsonRpcId,
+        result: object | None = None,
+    ) -> None: ...
+    async def reject_server_request(
+        self,
+        request_id: JsonRpcId,
+        code: int,
+        message: str,
+        *,
+        data: object | None = None,
+    ) -> None: ...
+    def register_server_request_handler(
+        self,
+        method: str,
+        handler: JsonRpcServerRequestHandler,
+    ) -> None: ...
+    def remove_server_request_handler(self, method: str) -> None: ...
 
     async def thread_start(self, ...) -> ThreadStartResult: ...
     async def thread_resume(self, ...) -> ThreadResumeResult: ...
@@ -411,8 +430,14 @@ Design notes:
 - `iter_notifications()` is the catch-all convenience view over the same notification bus used by filtered subscriptions.
 - `subscribe_notifications(...)` creates one bounded queue-backed subscription for all notifications or a filtered subset by `method`, `thread_id`, and `turn_id`.
 - `subscribe_thread_notifications(...)` and `subscribe_turn_notifications(...)` are convenience wrappers intended for higher-level routing layers.
+- `iter_server_requests()` remains the raw escape hatch for unhandled server-initiated requests.
+- `respond_server_request(...)` and `reject_server_request(...)` send low-level JSON-RPC replies tied to a pending server request id.
+- `register_server_request_handler(...)` lets callers auto-handle specific server-request methods without consuming the raw stream for those handled requests.
 - Notification subscriptions are independent. One slow or abandoned subscriber must not block other subscribers or the dispatcher task.
 - Notification subscription queues are bounded by default. If a subscriber falls behind and its queue fills, that subscription closes with `NotificationSubscriptionOverflowError` after any already-queued notifications are drained.
+- Unhandled server-request methods are surfaced to higher layers by default rather than rejected implicitly.
+- If a registered server-request handler crashes, the client sends a JSON-RPC internal-error reply for that request instead of silently dropping it.
+- `serverRequest/resolved` is the lifecycle signal that clears a pending server request locally, even when the request was already answered.
 - `request(timeout=...)` is a local wait deadline only. A request timeout does not imply that the server abandoned the work, and it does not close the connection.
 - Raw notification and server-request iterators wait indefinitely by default. Callers who want an idle deadline should wrap `anext(...)` or the async iterator in `asyncio.timeout(...)`.
 - Explicitly closing a notification subscription unregisters it immediately and ends its iterator cleanly.

@@ -230,6 +230,10 @@ class RequestCorrelationError(UnexpectedMessageError):
     """Raised when request/response correlation state is violated."""
 
 
+class ServerRequestStateError(RequestCorrelationError):
+    """Raised when server-initiated request tracking state is violated."""
+
+
 class DuplicateRequestIdError(RequestCorrelationError):
     """Raised when the client attempts to register a request id twice."""
 
@@ -279,6 +283,38 @@ class LateResponseError(RequestCorrelationError):
             "received JSON-RPC response after local waiter release for "
             f"request_id={request_id!r}; release_reason={release_reason}"
         )
+        if method is not None:
+            message = f"{message}; method={method}"
+        super().__init__(message)
+
+
+class DuplicateServerRequestIdError(ServerRequestStateError):
+    """Raised when the server reuses a pending server-request id."""
+
+    def __init__(self, request_id: JsonRpcId, *, method: str | None = None) -> None:
+        self.request_id = request_id
+        self.method = method
+        message = f"server request_id={request_id!r} is already pending"
+        if method is not None:
+            message = f"{message}; method={method}"
+        super().__init__(message)
+
+
+class UnknownServerRequestIdError(ServerRequestStateError):
+    """Raised when the caller responds to or clears an unknown server request id."""
+
+    def __init__(self, request_id: JsonRpcId) -> None:
+        self.request_id = request_id
+        super().__init__(f"unknown pending server request_id={request_id!r}")
+
+
+class ServerRequestAlreadyRespondedError(ServerRequestStateError):
+    """Raised when a caller tries to answer the same server request twice."""
+
+    def __init__(self, request_id: JsonRpcId, *, method: str | None = None) -> None:
+        self.request_id = request_id
+        self.method = method
+        message = f"server request_id={request_id!r} already has a client response"
         if method is not None:
             message = f"{message}; method={method}"
         super().__init__(message)

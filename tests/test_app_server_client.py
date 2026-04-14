@@ -18,13 +18,14 @@ from codex_agent_sdk import (
     TransportClosedError,
     UnknownResponseIdError,
 )
-from codex_agent_sdk.rpc import JsonRpcNotification
+from codex_agent_sdk.rpc import JsonRpcNotification, JsonRpcRequest
 from codex_agent_sdk.testing import (
     FakeAppServerScript,
     close_connection,
     emit_raw,
     expect_notification,
     expect_request,
+    expect_response,
     send_notification,
     send_response,
     send_server_request,
@@ -294,12 +295,13 @@ async def test_server_request_iterator_receives_server_initiated_requests(
         send_response(request_ref="initialize", result={"protocolVersion": 2}),
         expect_notification("initialized"),
         send_server_request(
-            "approval/requested",
+            "item/commandExecution/requestApproval",
             request_id="approval-1",
             params={
                 "threadId": "thread_1",
                 "turnId": "turn_1",
-                "kind": "command",
+                "itemId": "item_1",
+                "command": ["pytest", "-q"],
             },
         ),
         sleep_action(300),
@@ -313,13 +315,156 @@ async def test_server_request_iterator_receives_server_initiated_requests(
             timeout=IO_TIMEOUT_SECONDS,
         )
 
-    assert request.method == "approval/requested"
+    assert request.method == "item/commandExecution/requestApproval"
     assert request.request_id == "approval-1"
     assert request.params == {
         "threadId": "thread_1",
         "turnId": "turn_1",
-        "kind": "command",
+        "itemId": "item_1",
+        "command": ["pytest", "-q"],
     }
+
+
+@pytest.mark.asyncio
+async def test_client_can_manually_respond_to_server_request(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        send_server_request(
+            "item/fileChange/requestApproval",
+            request_id="file-approval-1",
+            params={
+                "threadId": "thread_1",
+                "turnId": "turn_1",
+                "itemId": "item_1",
+            },
+        ),
+        expect_response(
+            request_ref="file-approval-1",
+            result={"decision": "accept"},
+        ),
+        sleep_action(50),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="manual_server_request_response_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        request = await asyncio.wait_for(
+            anext(client.iter_server_requests()),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+        await client.respond_server_request(request.request_id, {"decision": "accept"})
+
+
+@pytest.mark.asyncio
+async def test_client_server_request_handler_can_auto_reply(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        send_server_request(
+            "item/tool/requestUserInput",
+            request_id="input-1",
+            params={
+                "threadId": "thread_1",
+                "turnId": "turn_1",
+                "questions": [
+                    {
+                        "id": "ticket",
+                        "header": "Ticket",
+                        "question": "Which ticket?",
+                    }
+                ],
+            },
+        ),
+        expect_response(
+            request_ref="input-1",
+            result={
+                "answers": [
+                    {
+                        "id": "ticket",
+                        "value": "ABC-123",
+                    }
+                ]
+            },
+        ),
+        sleep_action(50),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="server_request_handler_launcher.py",
+    )
+
+    handler_called = asyncio.Event()
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+
+        async def _handler(request: JsonRpcRequest) -> object:
+            assert request.method == "item/tool/requestUserInput"
+            handler_called.set()
+            return {
+                "answers": [
+                    {
+                        "id": "ticket",
+                        "value": "ABC-123",
+                    }
+                ]
+            }
+
+        client.register_server_request_handler("item/tool/requestUserInput", _handler)
+        await client.initialize()
+        await asyncio.wait_for(handler_called.wait(), timeout=IO_TIMEOUT_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_client_server_request_handler_errors_reply_with_jsonrpc_error(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        send_server_request(
+            "mcpServer/elicitation/request",
+            request_id="elicitation-1",
+            params={
+                "threadId": "thread_1",
+                "turnId": "turn_1",
+                "serverName": "github",
+                "mode": "form",
+            },
+        ),
+        expect_response(
+            request_ref="elicitation-1",
+            error={
+                "code": -32603,
+                "message": "client server-request handler failed",
+            },
+        ),
+        sleep_action(50),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="server_request_handler_error_launcher.py",
+    )
+    handler_called = asyncio.Event()
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+
+        async def _handler(request: JsonRpcRequest) -> object:
+            handler_called.set()
+            raise RuntimeError(f"boom for {request.request_id!r}")
+
+        client.register_server_request_handler("mcpServer/elicitation/request", _handler)
+        await client.initialize()
+        await asyncio.wait_for(handler_called.wait(), timeout=IO_TIMEOUT_SECONDS)
 
 
 @pytest.mark.asyncio

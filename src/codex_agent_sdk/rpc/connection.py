@@ -15,12 +15,14 @@ from .jsonrpc import (
     JsonRpcId,
     JsonRpcNotification,
     JsonRpcRequest,
+    JsonRpcResponseEnvelope,
 )
 from .router import (
     JsonRpcBackgroundDispatcher,
     JsonRpcNotificationBus,
     JsonRpcNotificationSubscription,
     JsonRpcRequestRegistry,
+    JsonRpcServerRequestHandler,
     JsonRpcServerRequestRouter,
 )
 
@@ -32,7 +34,9 @@ class JsonRpcConnection:
         self.transport = transport or StdioTransport()
         self._requests = JsonRpcRequestRegistry()
         self._notifications = JsonRpcNotificationBus()
-        self._server_requests = JsonRpcServerRequestRouter()
+        self._server_requests = JsonRpcServerRequestRouter(
+            response_sender=self._send_server_request_response
+        )
         self._start_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
         self._dispatcher = JsonRpcBackgroundDispatcher(
@@ -176,6 +180,43 @@ class JsonRpcConnection:
         async for request in self._server_requests.iter_requests():
             yield request
 
+    async def respond_server_request(
+        self,
+        request_id: JsonRpcId,
+        result: object | None = None,
+    ) -> None:
+        """Send a success response for one pending server-initiated request."""
+
+        self._raise_if_closed()
+        await self._server_requests.respond(request_id, result)
+
+    async def reject_server_request(
+        self,
+        request_id: JsonRpcId,
+        code: int,
+        message: str,
+        *,
+        data: object | None = None,
+    ) -> None:
+        """Send an error response for one pending server-initiated request."""
+
+        self._raise_if_closed()
+        await self._server_requests.reject(request_id, code, message, data=data)
+
+    def register_server_request_handler(
+        self,
+        method: str,
+        handler: JsonRpcServerRequestHandler,
+    ) -> None:
+        """Register or replace one async handler for a server-request method."""
+
+        self._server_requests.register_handler(method, handler)
+
+    def remove_server_request_handler(self, method: str) -> None:
+        """Remove one previously registered server-request handler if present."""
+
+        self._server_requests.remove_handler(method)
+
     async def close(self) -> None:
         """Close the connection and release all pending waiters."""
 
@@ -230,6 +271,15 @@ class JsonRpcConnection:
             self._closed_event.set()
 
         await self.transport.close()
+
+    async def _send_server_request_response(self, envelope: JsonRpcResponseEnvelope) -> None:
+        try:
+            await self.transport.write_stdin_envelope(envelope)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            await self._fail_connection(exc)
+            raise
 
     def _raise_if_closed(self) -> None:
         error = self._terminal_error

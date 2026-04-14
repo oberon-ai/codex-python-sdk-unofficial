@@ -23,7 +23,7 @@ from .options import AppServerConfig, CodexOptions
 from .results import TurnHandle
 from .rpc.connection import JsonRpcConnection
 from .rpc.jsonrpc import JsonRpcNotification, JsonRpcRequest
-from .rpc.router import JsonRpcNotificationSubscription
+from .rpc.router import JsonRpcNotificationSubscription, JsonRpcServerRequestHandler
 from .transport import StdioTransport
 
 
@@ -176,6 +176,48 @@ class AppServerClient:
         """Iterate raw server-initiated JSON-RPC requests."""
 
         return self._connection.iter_server_requests()
+
+    async def respond_server_request(
+        self,
+        request_id: str | int | None,
+        result: object | None = None,
+    ) -> None:
+        """Send a success response for one pending server-initiated request."""
+
+        self._require_initialized()
+        await self._connection.respond_server_request(request_id, result)
+
+    async def reject_server_request(
+        self,
+        request_id: str | int | None,
+        code: int,
+        message: str,
+        *,
+        data: object | None = None,
+    ) -> None:
+        """Send an error response for one pending server-initiated request."""
+
+        self._require_initialized()
+        await self._connection.reject_server_request(
+            request_id,
+            code,
+            message,
+            data=data,
+        )
+
+    def register_server_request_handler(
+        self,
+        method: str,
+        handler: JsonRpcServerRequestHandler,
+    ) -> None:
+        """Register or replace one async handler for a server-request method."""
+
+        self._connection.register_server_request_handler(method, handler)
+
+    def remove_server_request_handler(self, method: str) -> None:
+        """Remove one previously registered server-request handler if present."""
+
+        self._connection.remove_server_request_handler(method)
 
     async def thread_start(self, **params: Any) -> object:
         """Start a new app-server thread."""

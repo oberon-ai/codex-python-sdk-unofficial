@@ -9,26 +9,33 @@ from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Generic, Literal, TypeAlias, TypeVar, cast
+from typing import Final, Generic, Literal, TypeAlias, TypeVar, cast
 
 from ..errors import (
+    ClientStateError,
     DuplicateRequestIdError,
     DuplicateResponseError,
+    DuplicateServerRequestIdError,
+    JsonRpcError,
     LateResponseError,
     NotificationSubscriptionOverflowError,
+    ServerRequestAlreadyRespondedError,
     TransportClosedError,
     UnexpectedMessageError,
     UnknownResponseIdError,
+    UnknownServerRequestIdError,
     map_jsonrpc_error,
 )
 from ..transport import StdioTransport
 from .jsonrpc import (
     JsonRpcEnvelope,
+    JsonRpcErrorObject,
     JsonRpcErrorResponse,
     JsonRpcId,
     JsonRpcNotification,
     JsonRpcRequest,
     JsonRpcResponseEnvelope,
+    JsonRpcSuccessResponse,
     is_jsonrpc_notification_envelope,
     is_jsonrpc_request_envelope,
     is_jsonrpc_response_envelope,
@@ -42,11 +49,25 @@ FinalizedRequestStatus: TypeAlias = Literal[
     "failed",
 ]
 FatalDispatchCallback: TypeAlias = Callable[[BaseException], Awaitable[None]]
+ServerRequestUnhandledPolicy: TypeAlias = Literal["queue", "reject"]
+ServerRequestResponseSender: TypeAlias = Callable[[JsonRpcResponseEnvelope], Awaitable[None]]
 
 _LOGGER = logging.getLogger(__name__)
 _STREAM_CLOSED = object()
 DEFAULT_NOTIFICATION_SUBSCRIPTION_QUEUE_MAXSIZE = 256
 _T = TypeVar("_T")
+
+
+class _ServerRequestNotHandled:
+    def __repr__(self) -> str:
+        return "SERVER_REQUEST_NOT_HANDLED"
+
+
+SERVER_REQUEST_NOT_HANDLED: Final = _ServerRequestNotHandled()
+ServerRequestHandlerResult: TypeAlias = object | _ServerRequestNotHandled
+JsonRpcServerRequestHandler: TypeAlias = Callable[
+    [JsonRpcRequest], Awaitable[ServerRequestHandlerResult]
+]
 
 
 @dataclass(slots=True)
@@ -324,6 +345,11 @@ class JsonRpcRequestRegistry:
             self._pending_requests[allocated_request_id] = pending
 
         return pending
+
+    async def observe_remote_request_id(self, request_id: JsonRpcId) -> None:
+        """Advance the allocator past an observed remote integer request id."""
+
+        await self._allocator.observe(request_id)
 
     async def resolve_response(self, envelope: JsonRpcResponseEnvelope) -> None:
         """Resolve or reject the future for one inbound response envelope."""
@@ -610,10 +636,23 @@ class JsonRpcNotificationBus:
 
 
 class JsonRpcServerRequestRouter:
-    """Single-consumer router for raw server-initiated JSON-RPC requests."""
+    """Route server-initiated requests to handlers or a raw pending-request stream."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        response_sender: ServerRequestResponseSender | None = None,
+        unhandled_policy: ServerRequestUnhandledPolicy = "queue",
+    ) -> None:
+        if unhandled_policy not in ("queue", "reject"):
+            raise ValueError("unhandled_policy must be 'queue' or 'reject'")
         self._stream: _InboundMessageStream[JsonRpcRequest] = _InboundMessageStream()
+        self._response_sender = response_sender
+        self._unhandled_policy = unhandled_policy
+        self._pending_requests: dict[JsonRpcId, _PendingServerRequest] = {}
+        self._handlers: dict[str, JsonRpcServerRequestHandler] = {}
+        self._handler_tasks: set[asyncio.Task[None]] = set()
+        self._lock = asyncio.Lock()
 
     @property
     def is_closed(self) -> bool:
@@ -623,14 +662,228 @@ class JsonRpcServerRequestRouter:
     def terminal_error(self) -> BaseException | None:
         return self._stream.terminal_error
 
+    @property
+    def pending_count(self) -> int:
+        return len(self._pending_requests)
+
+    @property
+    def unhandled_policy(self) -> ServerRequestUnhandledPolicy:
+        return self._unhandled_policy
+
+    def register_handler(self, method: str, handler: JsonRpcServerRequestHandler) -> None:
+        """Register or replace one async handler for a server-request method."""
+
+        self._handlers[method] = handler
+
+    def remove_handler(self, method: str) -> None:
+        """Remove one previously registered server-request handler if present."""
+
+        self._handlers.pop(method, None)
+
     async def route_request(self, request: JsonRpcRequest) -> None:
-        await self._stream.put(request)
+        await self._register_request(request)
+
+        handler = self._handlers.get(request.method)
+        if handler is None:
+            await self._handle_unhandled_request(request)
+            return
+
+        task = asyncio.create_task(
+            self._run_handler(request, handler),
+            name=f"codex-agent-sdk.server-request:{request.method}",
+        )
+        self._handler_tasks.add(task)
+        task.add_done_callback(self._discard_handler_task)
+
+    async def respond(self, request_id: JsonRpcId, result: object | None = None) -> None:
+        """Send a success response for one pending server request."""
+
+        await self._send_response(
+            request_id,
+            JsonRpcSuccessResponse(id=request_id, result=result),
+        )
+
+    async def reject(
+        self,
+        request_id: JsonRpcId,
+        code: int,
+        message: str,
+        *,
+        data: object | None = None,
+    ) -> None:
+        """Send an error response for one pending server request."""
+
+        await self._send_response(
+            request_id,
+            JsonRpcErrorResponse(
+                id=request_id,
+                error=JsonRpcErrorObject(
+                    code=code,
+                    message=message,
+                    data=data,
+                    _data_present=data is not None,
+                ),
+            ),
+        )
+
+    async def resolve_request(self, request_id: JsonRpcId) -> bool:
+        """Clear one pending server request after ``serverRequest/resolved`` or cleanup."""
+
+        async with self._lock:
+            return self._pending_requests.pop(request_id, None) is not None
+
+    async def observe_resolution_notification(self, notification: JsonRpcNotification) -> bool:
+        """Clear a pending request when ``serverRequest/resolved`` is observed."""
+
+        if notification.method != "serverRequest/resolved" or not notification.has_params:
+            return False
+        has_request_id, request_id = _extract_resolved_request_id(notification.params)
+        if not has_request_id:
+            return False
+        return await self.resolve_request(request_id)
 
     def close(self, *, error: BaseException | None = None) -> None:
         self._stream.close(error=error)
+        self._pending_requests.clear()
+        for task in tuple(self._handler_tasks):
+            task.cancel()
 
     def iter_requests(self) -> AsyncIterator[JsonRpcRequest]:
         return self._stream.iter_items()
+
+    async def _register_request(self, request: JsonRpcRequest) -> None:
+        async with self._lock:
+            if request.request_id in self._pending_requests:
+                raise DuplicateServerRequestIdError(
+                    request.request_id,
+                    method=request.method,
+                )
+            self._pending_requests[request.request_id] = _PendingServerRequest(request=request)
+
+    async def _handle_unhandled_request(self, request: JsonRpcRequest) -> None:
+        if self._unhandled_policy == "queue":
+            await self._stream.put(request)
+            return
+
+        await self.reject(
+            request.request_id,
+            -32601,
+            f"unsupported server request method: {request.method}",
+        )
+
+    async def _run_handler(
+        self,
+        request: JsonRpcRequest,
+        handler: JsonRpcServerRequestHandler,
+    ) -> None:
+        try:
+            result = await handler(request)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            await self._handle_handler_exception(request, exc)
+            return
+
+        if result is SERVER_REQUEST_NOT_HANDLED:
+            await self._handle_unhandled_request(request)
+            return
+
+        try:
+            await self.respond(request.request_id, result)
+        except (ServerRequestAlreadyRespondedError, UnknownServerRequestIdError):
+            _LOGGER.warning(
+                "dropping completed server-request handler response for request_id=%r method=%s",
+                request.request_id,
+                request.method,
+            )
+
+    async def _handle_handler_exception(
+        self,
+        request: JsonRpcRequest,
+        exc: BaseException,
+    ) -> None:
+        _LOGGER.exception(
+            "server request handler failed for request_id=%r method=%s",
+            request.request_id,
+            request.method,
+            exc_info=exc,
+        )
+        try:
+            if isinstance(exc, JsonRpcError):
+                await self.reject(
+                    request.request_id,
+                    exc.code,
+                    exc.rpc_message,
+                    data=exc.data,
+                )
+                return
+
+            await self.reject(
+                request.request_id,
+                -32603,
+                "client server-request handler failed",
+            )
+        except (ServerRequestAlreadyRespondedError, UnknownServerRequestIdError):
+            _LOGGER.warning(
+                "server request handler error arrived after request cleanup "
+                "request_id=%r method=%s",
+                request.request_id,
+                request.method,
+            )
+
+    async def _send_response(
+        self,
+        request_id: JsonRpcId,
+        envelope: JsonRpcResponseEnvelope,
+    ) -> None:
+        response_sender = self._response_sender
+        if response_sender is None:
+            raise ClientStateError("server request responses are not available on this router")
+
+        async with self._lock:
+            pending = self._pending_requests.get(request_id)
+            if pending is None:
+                raise UnknownServerRequestIdError(request_id)
+            if pending.responded:
+                raise ServerRequestAlreadyRespondedError(
+                    request_id,
+                    method=pending.request.method,
+                )
+            pending.responded = True
+
+        await response_sender(envelope)
+
+    def _discard_handler_task(self, task: asyncio.Task[None]) -> None:
+        self._handler_tasks.discard(task)
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except BaseException as exc:
+            _LOGGER.warning(
+                "server request handler task exited with an unexpected error",
+                exc_info=exc,
+            )
+
+
+@dataclass(slots=True)
+class _PendingServerRequest:
+    request: JsonRpcRequest
+    responded: bool = False
+
+
+def _extract_resolved_request_id(params: object) -> tuple[bool, JsonRpcId]:
+    if not isinstance(params, Mapping):
+        return (False, None)
+
+    if "requestId" not in params:
+        return (False, None)
+    request_id = params["requestId"]
+    if isinstance(request_id, bool):
+        return (False, None)
+    if request_id is None or isinstance(request_id, str | int):
+        return (True, request_id)
+    return (False, None)
 
 
 class JsonRpcBackgroundDispatcher:
@@ -688,10 +941,14 @@ class JsonRpcBackgroundDispatcher:
             await self._dispatch_response(cast(JsonRpcResponseEnvelope, envelope))
             return
         if is_jsonrpc_request_envelope(envelope):
-            await self.server_requests.route_request(cast(JsonRpcRequest, envelope))
+            request = cast(JsonRpcRequest, envelope)
+            await self.requests.observe_remote_request_id(request.request_id)
+            await self.server_requests.route_request(request)
             return
         if is_jsonrpc_notification_envelope(envelope):
-            await self.notifications.publish(cast(JsonRpcNotification, envelope))
+            notification = cast(JsonRpcNotification, envelope)
+            await self.server_requests.observe_resolution_notification(notification)
+            await self.notifications.publish(notification)
             return
         raise UnexpectedMessageError(f"received invalid JSON-RPC envelope shape: {envelope!r}")
 
@@ -740,6 +997,8 @@ __all__ = [
     "JsonRpcNotificationSubscription",
     "JsonRpcRequestIdAllocator",
     "JsonRpcRequestRegistry",
+    "JsonRpcServerRequestHandler",
     "JsonRpcServerRequestRouter",
     "PendingJsonRpcRequest",
+    "SERVER_REQUEST_NOT_HANDLED",
 ]

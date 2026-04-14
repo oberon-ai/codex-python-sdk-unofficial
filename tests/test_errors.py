@@ -10,6 +10,7 @@ from codex_agent_sdk import (
     CodexTimeoutError,
     DuplicateRequestIdError,
     DuplicateResponseError,
+    DuplicateServerRequestIdError,
     JsonRpcInternalError,
     JsonRpcInvalidParamsError,
     JsonRpcInvalidRequestError,
@@ -24,12 +25,15 @@ from codex_agent_sdk import (
     ResponseValidationError,
     RetryableOverloadError,
     RetryBudgetExceededError,
+    ServerRequestAlreadyRespondedError,
+    ServerRequestStateError,
     ShutdownError,
     ShutdownTimeoutError,
     StartupError,
     StartupTimeoutError,
     TransportWriteError,
     UnknownResponseIdError,
+    UnknownServerRequestIdError,
     is_retryable_error,
     map_jsonrpc_error,
 )
@@ -171,6 +175,20 @@ class ExceptionStructureTests(unittest.TestCase):
 
         self.assertEqual(late_response.release_reason, "timed_out")
         self.assertEqual(late_response.method, "thread/start")
+
+    def test_server_request_state_errors_preserve_request_context(self) -> None:
+        duplicate_request = DuplicateServerRequestIdError("req-7", method="item/tool/call")
+        unknown_request = UnknownServerRequestIdError("req-8")
+        duplicate_response = ServerRequestAlreadyRespondedError(
+            "req-9",
+            method="item/fileChange/requestApproval",
+        )
+
+        for error in (duplicate_request, unknown_request, duplicate_response):
+            with self.subTest(error=error.__class__.__name__):
+                self.assertIsInstance(error, ServerRequestStateError)
+                self.assertIsInstance(error, RequestCorrelationError)
+                self.assertIn("req-", str(error))
 
     def test_notification_subscription_overflow_error_preserves_filter_context(self) -> None:
         error = NotificationSubscriptionOverflowError(

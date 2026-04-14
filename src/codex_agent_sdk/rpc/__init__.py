@@ -24,11 +24,13 @@ from .jsonrpc import (
 )
 from .router import (
     DEFAULT_NOTIFICATION_SUBSCRIPTION_QUEUE_MAXSIZE,
+    SERVER_REQUEST_NOT_HANDLED,
     JsonRpcBackgroundDispatcher,
     JsonRpcNotificationBus,
     JsonRpcNotificationSubscription,
     JsonRpcRequestIdAllocator,
     JsonRpcRequestRegistry,
+    JsonRpcServerRequestHandler,
     JsonRpcServerRequestRouter,
     PendingJsonRpcRequest,
 )
@@ -50,9 +52,11 @@ __all__ = [
     "JsonRpcRequestIdAllocator",
     "JsonRpcRequestRegistry",
     "JsonRpcResponseEnvelope",
+    "JsonRpcServerRequestHandler",
     "JsonRpcServerRequestRouter",
     "JsonRpcSuccessResponse",
     "PendingJsonRpcRequest",
+    "SERVER_REQUEST_NOT_HANDLED",
     "classify_jsonrpc_envelope",
     "coerce_jsonrpc_envelope",
     "is_jsonrpc_error_response_envelope",
