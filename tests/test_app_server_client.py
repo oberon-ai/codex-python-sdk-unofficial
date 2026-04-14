@@ -25,6 +25,7 @@ from codex_agent_sdk.testing import (
     emit_raw,
     expect_notification,
     expect_request,
+    send_notification,
     send_response,
     send_server_request,
     sleep_action,
@@ -319,6 +320,74 @@ async def test_server_request_iterator_receives_server_initiated_requests(
         "turnId": "turn_1",
         "kind": "command",
     }
+
+
+@pytest.mark.asyncio
+async def test_notification_subscriptions_can_coexist_and_filter(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        sleep_action(100),
+        send_notification(
+            "thread/updated",
+            params={"threadId": "thread_1", "status": "running"},
+        ),
+        send_notification(
+            "turn/started",
+            params={"threadId": "thread_1", "turnId": "turn_1", "status": "running"},
+        ),
+        send_notification(
+            "turn/started",
+            params={"threadId": "thread_2", "turnId": "turn_2", "status": "running"},
+        ),
+        sleep_action(300),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="notification_subscriptions_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        catch_all = client.iter_notifications()
+        thread_notifications = client.subscribe_thread_notifications(
+            "thread_1"
+        ).iter_notifications()
+        turn_notifications = client.subscribe_turn_notifications(
+            "turn_1",
+            thread_id="thread_1",
+        ).iter_notifications()
+
+        first = await asyncio.wait_for(anext(catch_all), timeout=IO_TIMEOUT_SECONDS)
+        second = await asyncio.wait_for(anext(catch_all), timeout=IO_TIMEOUT_SECONDS)
+        third = await asyncio.wait_for(anext(catch_all), timeout=IO_TIMEOUT_SECONDS)
+
+        thread_first = await asyncio.wait_for(
+            anext(thread_notifications),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+        thread_second = await asyncio.wait_for(
+            anext(thread_notifications),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+        turn_only = await asyncio.wait_for(
+            anext(turn_notifications),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+    assert [first.method, second.method, third.method] == [
+        "thread/updated",
+        "turn/started",
+        "turn/started",
+    ]
+    assert first.params == {"threadId": "thread_1", "status": "running"}
+    assert second.params == {"threadId": "thread_1", "turnId": "turn_1", "status": "running"}
+    assert third.params == {"threadId": "thread_2", "turnId": "turn_2", "status": "running"}
+    assert thread_first == first
+    assert thread_second == second
+    assert turn_only == second
 
 
 @pytest.mark.asyncio

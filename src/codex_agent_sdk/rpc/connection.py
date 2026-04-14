@@ -19,6 +19,7 @@ from .jsonrpc import (
 from .router import (
     JsonRpcBackgroundDispatcher,
     JsonRpcNotificationBus,
+    JsonRpcNotificationSubscription,
     JsonRpcRequestRegistry,
     JsonRpcServerRequestRouter,
 )
@@ -117,8 +118,57 @@ class JsonRpcConnection:
     async def iter_notifications(self) -> AsyncIterator[JsonRpcNotification]:
         """Iterate raw JSON-RPC notifications until close or connection failure."""
 
-        async for notification in self._notifications.iter_notifications():
+        async for notification in self.subscribe_notifications():
             yield notification
+
+    def subscribe_notifications(
+        self,
+        *,
+        method: str | None = None,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription:
+        """Subscribe to all notifications or one filtered subset."""
+
+        return self._notifications.subscribe(
+            method=method,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            max_queue_size=max_queue_size,
+        )
+
+    def subscribe_thread_notifications(
+        self,
+        thread_id: str,
+        *,
+        method: str | None = None,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription:
+        """Subscribe to notifications scoped to one thread id."""
+
+        return self._notifications.subscribe_thread(
+            thread_id,
+            method=method,
+            max_queue_size=max_queue_size,
+        )
+
+    def subscribe_turn_notifications(
+        self,
+        turn_id: str,
+        *,
+        thread_id: str | None = None,
+        method: str | None = None,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription:
+        """Subscribe to notifications scoped to one turn id."""
+
+        return self._notifications.subscribe_turn(
+            turn_id,
+            thread_id=thread_id,
+            method=method,
+            max_queue_size=max_queue_size,
+        )
 
     async def iter_server_requests(self) -> AsyncIterator[JsonRpcRequest]:
         """Iterate raw server-initiated JSON-RPC requests until close or failure."""

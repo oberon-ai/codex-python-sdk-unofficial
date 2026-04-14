@@ -23,8 +23,10 @@ from .jsonrpc import (
     serialize_jsonrpc_envelope,
 )
 from .router import (
+    DEFAULT_NOTIFICATION_SUBSCRIPTION_QUEUE_MAXSIZE,
     JsonRpcBackgroundDispatcher,
     JsonRpcNotificationBus,
+    JsonRpcNotificationSubscription,
     JsonRpcRequestIdAllocator,
     JsonRpcRequestRegistry,
     JsonRpcServerRequestRouter,
@@ -33,6 +35,7 @@ from .router import (
 
 __all__ = [
     "JSON_RPC_VERSION",
+    "DEFAULT_NOTIFICATION_SUBSCRIPTION_QUEUE_MAXSIZE",
     "JsonRpcBackgroundDispatcher",
     "JsonRpcConnection",
     "JsonRpcEnvelope",
@@ -42,6 +45,7 @@ __all__ = [
     "JsonRpcId",
     "JsonRpcNotification",
     "JsonRpcNotificationBus",
+    "JsonRpcNotificationSubscription",
     "JsonRpcRequest",
     "JsonRpcRequestIdAllocator",
     "JsonRpcRequestRegistry",

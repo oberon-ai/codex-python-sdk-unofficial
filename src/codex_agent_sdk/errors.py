@@ -296,6 +296,35 @@ class ResponseValidationError(ProtocolError):
         super().__init__("; ".join(parts))
 
 
+class NotificationSubscriptionOverflowError(CodexError):
+    """Raised when one notification subscriber falls behind its bounded queue."""
+
+    def __init__(
+        self,
+        *,
+        max_queue_size: int,
+        method: str | None = None,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+    ) -> None:
+        self.max_queue_size = max_queue_size
+        self.method = method
+        self.thread_id = thread_id
+        self.turn_id = turn_id
+
+        details = [
+            "notification subscription queue overflowed before the consumer caught up",
+            f"max_queue_size={max_queue_size}",
+        ]
+        if method is not None:
+            details.append(f"method={method}")
+        if thread_id is not None:
+            details.append(f"thread_id={thread_id}")
+        if turn_id is not None:
+            details.append(f"turn_id={turn_id}")
+        super().__init__("; ".join(details))
+
+
 class CodexTimeoutError(CodexError):
     """Base class for SDK-local timeout errors."""
 

@@ -17,6 +17,7 @@ from codex_agent_sdk import (
     JsonRpcParseError,
     JsonRpcServerError,
     LateResponseError,
+    NotificationSubscriptionOverflowError,
     NotInitializedError,
     RequestCorrelationError,
     RequestTimeoutError,
@@ -170,6 +171,21 @@ class ExceptionStructureTests(unittest.TestCase):
 
         self.assertEqual(late_response.release_reason, "timed_out")
         self.assertEqual(late_response.method, "thread/start")
+
+    def test_notification_subscription_overflow_error_preserves_filter_context(self) -> None:
+        error = NotificationSubscriptionOverflowError(
+            max_queue_size=32,
+            method="turn/started",
+            thread_id="thread_1",
+            turn_id="turn_1",
+        )
+
+        self.assertEqual(error.max_queue_size, 32)
+        self.assertEqual(error.method, "turn/started")
+        self.assertEqual(error.thread_id, "thread_1")
+        self.assertEqual(error.turn_id, "turn_1")
+        self.assertIn("max_queue_size=32", str(error))
+        self.assertIn("thread_id=thread_1", str(error))
 
 
 if __name__ == "__main__":

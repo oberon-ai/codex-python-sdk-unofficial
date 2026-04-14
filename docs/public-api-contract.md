@@ -358,6 +358,29 @@ class AppServerClient:
     ) -> object: ...
     async def notify(self, method: str, params: object | None = None) -> None: ...
     def iter_notifications(self) -> AsyncIterator[JsonRpcNotification]: ...
+    def subscribe_notifications(
+        self,
+        *,
+        method: str | None = None,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription: ...
+    def subscribe_thread_notifications(
+        self,
+        thread_id: str,
+        *,
+        method: str | None = None,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription: ...
+    def subscribe_turn_notifications(
+        self,
+        turn_id: str,
+        *,
+        thread_id: str | None = None,
+        method: str | None = None,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription: ...
     def iter_server_requests(self) -> AsyncIterator[JsonRpcRequest]: ...
 
     async def thread_start(self, ...) -> ThreadStartResult: ...
@@ -385,8 +408,14 @@ Design notes:
 
 - `initialize()` performs the full required handshake and returns the initialize result after the `initialized` notification has already been sent.
 - `request()` and `notify()` are raw escape hatches.
+- `iter_notifications()` is the catch-all convenience view over the same notification bus used by filtered subscriptions.
+- `subscribe_notifications(...)` creates one bounded queue-backed subscription for all notifications or a filtered subset by `method`, `thread_id`, and `turn_id`.
+- `subscribe_thread_notifications(...)` and `subscribe_turn_notifications(...)` are convenience wrappers intended for higher-level routing layers.
+- Notification subscriptions are independent. One slow or abandoned subscriber must not block other subscribers or the dispatcher task.
+- Notification subscription queues are bounded by default. If a subscriber falls behind and its queue fills, that subscription closes with `NotificationSubscriptionOverflowError` after any already-queued notifications are drained.
 - `request(timeout=...)` is a local wait deadline only. A request timeout does not imply that the server abandoned the work, and it does not close the connection.
 - Raw notification and server-request iterators wait indefinitely by default. Callers who want an idle deadline should wrap `anext(...)` or the async iterator in `asyncio.timeout(...)`.
+- Explicitly closing a notification subscription unregisters it immediately and ends its iterator cleanly.
 - Explicit `close()` releases any pending request waiters with a connection-closed error and ends the raw inbound iterators cleanly.
 - Unexpected EOF after startup is treated as connection failure. Pending request waiters receive `TransportClosedError`, and raw inbound iterators raise the same failure once queued items are drained.
 - The typed helpers above should cover the stable app-server methods needed by the v1 high-level client.

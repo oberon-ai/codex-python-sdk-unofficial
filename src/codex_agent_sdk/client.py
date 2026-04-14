@@ -23,6 +23,7 @@ from .options import AppServerConfig, CodexOptions
 from .results import TurnHandle
 from .rpc.connection import JsonRpcConnection
 from .rpc.jsonrpc import JsonRpcNotification, JsonRpcRequest
+from .rpc.router import JsonRpcNotificationSubscription
 from .transport import StdioTransport
 
 
@@ -121,6 +122,55 @@ class AppServerClient:
         """Iterate raw JSON-RPC notifications from the server."""
 
         return self._connection.iter_notifications()
+
+    def subscribe_notifications(
+        self,
+        *,
+        method: str | None = None,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription:
+        """Subscribe to all notifications or one filtered subset."""
+
+        return self._connection.subscribe_notifications(
+            method=method,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            max_queue_size=max_queue_size,
+        )
+
+    def subscribe_thread_notifications(
+        self,
+        thread_id: str,
+        *,
+        method: str | None = None,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription:
+        """Subscribe to notifications scoped to one thread id."""
+
+        return self._connection.subscribe_thread_notifications(
+            thread_id,
+            method=method,
+            max_queue_size=max_queue_size,
+        )
+
+    def subscribe_turn_notifications(
+        self,
+        turn_id: str,
+        *,
+        thread_id: str | None = None,
+        method: str | None = None,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription:
+        """Subscribe to notifications scoped to one turn id."""
+
+        return self._connection.subscribe_turn_notifications(
+            turn_id,
+            thread_id=thread_id,
+            method=method,
+            max_queue_size=max_queue_size,
+        )
 
     def iter_server_requests(self) -> AsyncIterator[JsonRpcRequest]:
         """Iterate raw server-initiated JSON-RPC requests."""

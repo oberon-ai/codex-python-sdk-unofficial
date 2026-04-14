@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import weakref
 from collections import OrderedDict
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from typing import Generic, Literal, TypeAlias, TypeVar, cast
@@ -14,6 +15,7 @@ from ..errors import (
     DuplicateRequestIdError,
     DuplicateResponseError,
     LateResponseError,
+    NotificationSubscriptionOverflowError,
     TransportClosedError,
     UnexpectedMessageError,
     UnknownResponseIdError,
@@ -43,6 +45,7 @@ FatalDispatchCallback: TypeAlias = Callable[[BaseException], Awaitable[None]]
 
 _LOGGER = logging.getLogger(__name__)
 _STREAM_CLOSED = object()
+DEFAULT_NOTIFICATION_SUBSCRIPTION_QUEUE_MAXSIZE = 256
 _T = TypeVar("_T")
 
 
@@ -64,8 +67,10 @@ class _FinalizedRequest:
 class _InboundMessageStream(Generic[_T]):
     """Single-consumer async stream with explicit close and terminal-error state."""
 
-    def __init__(self) -> None:
-        self._queue: asyncio.Queue[_T] = asyncio.Queue()
+    def __init__(self, *, max_queue_size: int = 0) -> None:
+        if max_queue_size < 0:
+            raise ValueError("max_queue_size must be non-negative")
+        self._queue: asyncio.Queue[_T] = asyncio.Queue(maxsize=max_queue_size)
         self._closed_event = asyncio.Event()
         self._terminal_error: BaseException | None = None
 
@@ -81,6 +86,12 @@ class _InboundMessageStream(Generic[_T]):
         if self._closed_event.is_set():
             return False
         await self._queue.put(item)
+        return True
+
+    def put_nowait(self, item: _T) -> bool:
+        if self._closed_event.is_set():
+            return False
+        self._queue.put_nowait(item)
         return True
 
     def close(self, *, error: BaseException | None = None) -> None:
@@ -128,6 +139,120 @@ class _InboundMessageStream(Generic[_T]):
         if error is None:
             return _STREAM_CLOSED
         raise error
+
+
+@dataclass(frozen=True, slots=True)
+class _NotificationSubscriptionFilter:
+    method: str | None = None
+    thread_id: str | None = None
+    turn_id: str | None = None
+
+    def matches(self, notification: JsonRpcNotification) -> bool:
+        if self.method is not None and notification.method != self.method:
+            return False
+
+        if self.thread_id is None and self.turn_id is None:
+            return True
+
+        params = notification.params if notification.has_params else None
+        if not isinstance(params, Mapping):
+            return False
+
+        if self.thread_id is not None and params.get("threadId") != self.thread_id:
+            return False
+        if self.turn_id is not None and params.get("turnId") != self.turn_id:
+            return False
+        return True
+
+
+class JsonRpcNotificationSubscription:
+    """One bounded notification subscription owned by ``JsonRpcNotificationBus``."""
+
+    def __init__(
+        self,
+        *,
+        bus: JsonRpcNotificationBus,
+        subscription_id: int,
+        method: str | None,
+        thread_id: str | None,
+        turn_id: str | None,
+        max_queue_size: int,
+    ) -> None:
+        self._bus = bus
+        self._subscription_id = subscription_id
+        self._filter = _NotificationSubscriptionFilter(
+            method=method,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        self._max_queue_size = max_queue_size
+        self._stream: _InboundMessageStream[JsonRpcNotification] = _InboundMessageStream(
+            max_queue_size=max_queue_size
+        )
+        self._closed = False
+
+    @property
+    def method(self) -> str | None:
+        return self._filter.method
+
+    @property
+    def thread_id(self) -> str | None:
+        return self._filter.thread_id
+
+    @property
+    def turn_id(self) -> str | None:
+        return self._filter.turn_id
+
+    @property
+    def max_queue_size(self) -> int:
+        return self._max_queue_size
+
+    @property
+    def is_closed(self) -> bool:
+        return self._stream.is_closed
+
+    @property
+    def terminal_error(self) -> BaseException | None:
+        return self._stream.terminal_error
+
+    def close(self) -> None:
+        """Close the subscription and unregister it from the parent bus."""
+
+        self._bus._unsubscribe(self._subscription_id)
+        self._close_from_bus()
+
+    def iter_notifications(self) -> AsyncIterator[JsonRpcNotification]:
+        return self._iter_notifications()
+
+    def __aiter__(self) -> AsyncIterator[JsonRpcNotification]:
+        return self.iter_notifications()
+
+    def _matches(self, notification: JsonRpcNotification) -> bool:
+        return self._filter.matches(notification)
+
+    def _enqueue(self, notification: JsonRpcNotification) -> bool:
+        return self._stream.put_nowait(notification)
+
+    def _overflow_error(self) -> NotificationSubscriptionOverflowError:
+        return NotificationSubscriptionOverflowError(
+            max_queue_size=self._max_queue_size,
+            method=self.method,
+            thread_id=self.thread_id,
+            turn_id=self.turn_id,
+        )
+
+    def _close_from_bus(self, *, error: BaseException | None = None) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._stream.close(error=error)
+
+    async def _iter_notifications(self) -> AsyncIterator[JsonRpcNotification]:
+        try:
+            async for notification in self._stream.iter_items():
+                yield notification
+        finally:
+            self.close()
 
 
 class JsonRpcRequestIdAllocator:
@@ -330,27 +455,158 @@ class JsonRpcRequestRegistry:
 
 
 class JsonRpcNotificationBus:
-    """Single-consumer bus for raw JSON-RPC notifications."""
+    """Bounded fan-out bus for raw JSON-RPC notifications."""
 
-    def __init__(self) -> None:
-        self._stream: _InboundMessageStream[JsonRpcNotification] = _InboundMessageStream()
+    def __init__(
+        self,
+        *,
+        default_max_queue_size: int = DEFAULT_NOTIFICATION_SUBSCRIPTION_QUEUE_MAXSIZE,
+    ) -> None:
+        if default_max_queue_size <= 0:
+            raise ValueError("default_max_queue_size must be positive")
+        self._default_max_queue_size = default_max_queue_size
+        self._next_subscription_id = 0
+        self._subscriptions: weakref.WeakValueDictionary[int, JsonRpcNotificationSubscription] = (
+            weakref.WeakValueDictionary()
+        )
+        self._closed = False
+        self._terminal_error: BaseException | None = None
 
     @property
     def is_closed(self) -> bool:
-        return self._stream.is_closed
+        return self._closed
 
     @property
     def terminal_error(self) -> BaseException | None:
-        return self._stream.terminal_error
+        return self._terminal_error
+
+    @property
+    def subscriber_count(self) -> int:
+        return len(self._subscriptions)
+
+    @property
+    def default_max_queue_size(self) -> int:
+        return self._default_max_queue_size
 
     async def publish(self, notification: JsonRpcNotification) -> None:
-        await self._stream.put(notification)
+        if self._closed:
+            return
+
+        for subscription in tuple(self._subscriptions.values()):
+            if not subscription._matches(notification):
+                continue
+            try:
+                queued = subscription._enqueue(notification)
+            except asyncio.QueueFull:
+                overflow_error = subscription._overflow_error()
+                _LOGGER.warning(
+                    "closing lagging notification subscription "
+                    "method=%r thread_id=%r turn_id=%r max_queue_size=%d",
+                    subscription.method,
+                    subscription.thread_id,
+                    subscription.turn_id,
+                    subscription.max_queue_size,
+                )
+                self._unsubscribe(subscription._subscription_id)
+                subscription._close_from_bus(error=overflow_error)
+                continue
+
+            if not queued:
+                self._unsubscribe(subscription._subscription_id)
 
     def close(self, *, error: BaseException | None = None) -> None:
-        self._stream.close(error=error)
+        if self._closed:
+            return
+        self._closed = True
+        if error is not None and self._terminal_error is None:
+            self._terminal_error = error
+
+        for subscription in tuple(self._subscriptions.values()):
+            self._unsubscribe(subscription._subscription_id)
+            subscription._close_from_bus(error=error)
+
+    def subscribe(
+        self,
+        *,
+        method: str | None = None,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription:
+        """Create one queue-backed subscription for all or a filtered notification subset."""
+
+        queue_limit = self._coerce_max_queue_size(max_queue_size)
+        self._next_subscription_id += 1
+        subscription = JsonRpcNotificationSubscription(
+            bus=self,
+            subscription_id=self._next_subscription_id,
+            method=method,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            max_queue_size=queue_limit,
+        )
+
+        if self._closed:
+            subscription._close_from_bus(error=self._terminal_error)
+            return subscription
+
+        self._subscriptions[self._next_subscription_id] = subscription
+        return subscription
+
+    def subscribe_all(
+        self,
+        *,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription:
+        return self.subscribe(max_queue_size=max_queue_size)
+
+    def subscribe_method(
+        self,
+        method: str,
+        *,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription:
+        return self.subscribe(method=method, max_queue_size=max_queue_size)
+
+    def subscribe_thread(
+        self,
+        thread_id: str,
+        *,
+        method: str | None = None,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription:
+        return self.subscribe(
+            method=method,
+            thread_id=thread_id,
+            max_queue_size=max_queue_size,
+        )
+
+    def subscribe_turn(
+        self,
+        turn_id: str,
+        *,
+        thread_id: str | None = None,
+        method: str | None = None,
+        max_queue_size: int | None = None,
+    ) -> JsonRpcNotificationSubscription:
+        return self.subscribe(
+            method=method,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            max_queue_size=max_queue_size,
+        )
 
     def iter_notifications(self) -> AsyncIterator[JsonRpcNotification]:
-        return self._stream.iter_items()
+        return self.subscribe_all().iter_notifications()
+
+    def _coerce_max_queue_size(self, max_queue_size: int | None) -> int:
+        queue_limit = self._default_max_queue_size if max_queue_size is None else max_queue_size
+        if queue_limit <= 0:
+            raise ValueError("max_queue_size must be positive")
+        return queue_limit
+
+    def _unsubscribe(self, subscription_id: int) -> None:
+        self._subscriptions.pop(subscription_id, None)
 
 
 class JsonRpcServerRequestRouter:
@@ -478,8 +734,10 @@ class JsonRpcBackgroundDispatcher:
 
 
 __all__ = [
+    "DEFAULT_NOTIFICATION_SUBSCRIPTION_QUEUE_MAXSIZE",
     "JsonRpcBackgroundDispatcher",
     "JsonRpcNotificationBus",
+    "JsonRpcNotificationSubscription",
     "JsonRpcRequestIdAllocator",
     "JsonRpcRequestRegistry",
     "JsonRpcServerRequestRouter",
