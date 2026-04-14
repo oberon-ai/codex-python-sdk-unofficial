@@ -10,6 +10,11 @@ Contributor rules:
   `codex_agent_sdk.protocol` or `codex_agent_sdk.rpc`.
 - Prefer small generated surfaces and thin handwritten adapters rather than
   duplicating wire shapes manually across the codebase.
+- Use the vendored canonical schema snapshots under
+  `tests/fixtures/schema_snapshots/` as generation input rather than whatever
+  happens to be on a developer machine.
+- Check `tests/fixtures/schema_snapshots/vendor_manifest.json` for the current
+  schema pin, hashes, and stable-versus-experimental split.
 
 Later code generation tasks can add machine-written modules here without
 restructuring the rest of the SDK package.

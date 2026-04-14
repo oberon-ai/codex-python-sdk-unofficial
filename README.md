@@ -25,6 +25,9 @@ The curated root import surface and import policy live in [docs/public-import-po
 
 The dependency rationale and pinned repo toolchain live in [docs/dependency-policy.md](docs/dependency-policy.md).
 
+The pinned schema snapshots, refresh workflow, and stable-versus-experimental
+policy live in [docs/schema-vendoring.md](docs/schema-vendoring.md).
+
 Protocol fixture, schema snapshot, fake-server script, and golden transcript
 conventions live in [tests/fixtures/README.md](tests/fixtures/README.md).
 

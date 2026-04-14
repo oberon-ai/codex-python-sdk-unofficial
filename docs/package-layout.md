@@ -30,6 +30,9 @@ separate as the SDK grows.
 - `tests/fixtures/`
   - Curated JSON-RPC envelopes, schema snapshots, fake-server scripts, and
     golden transcripts used by deterministic protocol and client tests.
+  - The vendored schema source of truth lives under
+    `tests/fixtures/schema_snapshots/`, with hashes and version pin metadata in
+    `tests/fixtures/schema_snapshots/vendor_manifest.json`.
 - `examples/`
   - User-facing example programs and sample workflows.
 - `scripts/`

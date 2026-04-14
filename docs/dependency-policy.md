@@ -74,3 +74,8 @@ Protocol code generation work:
 ```bash
 python -m pip install -e . -r requirements/dev.txt -r requirements/codegen.txt
 ```
+
+Refreshing the vendored schema snapshots does not require the codegen-only
+Python dependencies. It uses the pinned `codex` runtime recorded in
+`tests/fixtures/schema_snapshots/vendor_manifest.json` plus the stdlib-only
+`scripts/vendor_protocol_schema.py` helper.

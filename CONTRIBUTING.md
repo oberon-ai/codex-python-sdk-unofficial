@@ -25,6 +25,30 @@ python -m pip install -e . -r requirements/dev.txt -r requirements/codegen.txt
 The dependency rationale and pinning policy live in
 `docs/dependency-policy.md`.
 
+## Vendored schema snapshots
+
+The app-server schema source of truth for this repo is the checked-in pair of
+canonical JSON snapshots under `tests/fixtures/schema_snapshots/`. Their current
+generator pin and hashes live in
+`tests/fixtures/schema_snapshots/vendor_manifest.json`.
+
+Typical maintenance flow:
+
+```bash
+python scripts/vendor_protocol_schema.py --check
+```
+
+Intentional pin bumps require an explicit opt-in:
+
+```bash
+python scripts/vendor_protocol_schema.py --allow-version-change
+```
+
+If the manifest pin and the installed `codex` binary version do not match, the
+script fails fast rather than silently refreshing the snapshots from the wrong
+runtime version. The rationale and workflow details live in
+`docs/schema-vendoring.md`.
+
 ## Quality gates
 
 Run these commands from the repository root:

@@ -56,7 +56,9 @@ class FixtureLayoutTests(unittest.TestCase):
         self.assertIn(".approval.jsonl", content)
         self.assertIn("stable", content)
         self.assertIn("experimental", content)
+        self.assertIn("vendor_manifest.json", content)
         self.assertIn("src/codex_agent_sdk/generated/", content)
+        self.assertIn("scripts/vendor_protocol_schema.py", content)
         self.assertIn("Integration recordings", content)
 
     def test_package_layout_doc_mentions_fixtures_tree(self) -> None:

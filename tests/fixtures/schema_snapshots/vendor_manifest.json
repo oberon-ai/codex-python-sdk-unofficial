@@ -1,0 +1,41 @@
+{
+  "artifacts": {
+    "experimental": {
+      "definition_count": 360,
+      "experimental": true,
+      "path": "tests/fixtures/schema_snapshots/experimental/codex_app_server_protocol.v2.experimental.schemas.json",
+      "sha256": "cf326b7c817c700279da825ef56c57abf7917684dfa89a85b8fadd6425551b12"
+    },
+    "stable": {
+      "definition_count": 339,
+      "experimental": false,
+      "path": "tests/fixtures/schema_snapshots/stable/codex_app_server_protocol.v2.stable.schemas.json",
+      "sha256": "be6ab686dae821d25a487611eef1da9db3b4af5b74cb7d74caa7e5e43b134d52"
+    }
+  },
+  "canonicalization": {
+    "encoding": "utf-8",
+    "indent": 2,
+    "json_sort_keys": true,
+    "trailing_newline": true
+  },
+  "generator": {
+    "codex_cli_version": "codex-cli 0.118.0",
+    "command_templates": {
+      "experimental": "codex app-server generate-json-schema --experimental --out <OUT_DIR>",
+      "stable": "codex app-server generate-json-schema --out <OUT_DIR>"
+    }
+  },
+  "schema_family": "codex_app_server_protocol.v2",
+  "source_of_truth": "tests/fixtures/schema_snapshots/{stable,experimental}/codex_app_server_protocol.v2.*.schemas.json",
+  "upstream_reference": {
+    "repository": "openai/codex",
+    "source_path": "codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.v2.schemas.json"
+  },
+  "version_policy": {
+    "current_pin": "codex-cli 0.118.0",
+    "pin_type": "codex_cli_version",
+    "update_flag": "--allow-version-change",
+    "update_requires_explicit_opt_in": true
+  }
+}

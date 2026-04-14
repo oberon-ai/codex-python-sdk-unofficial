@@ -20,6 +20,9 @@ that future tests can load without needing a live `codex app-server` process.
 - `schema_snapshots/experimental/`
   - Experimental upstream schema snapshots kept separate from stable fixtures so
     stable-by-default tests do not accidentally broaden their coverage.
+- `schema_snapshots/vendor_manifest.json`
+  - Machine-readable metadata for the current schema pin, canonicalization
+    policy, and per-artifact hashes.
 - `fake_server_scripts/`
   - Deterministic JSONL scripts that a fake app-server can replay during tests.
 - `golden_transcripts/turns/`
@@ -52,6 +55,12 @@ Python modules generated from schema snapshots belong under
 
 Schema snapshots belong here because they are reviewable test inputs and drift
 detectors, even when later tasks also generate Python code from them.
+
+The source of truth for schema inputs is the vendored pair of canonical JSON
+files under `schema_snapshots/stable/` and `schema_snapshots/experimental/`,
+not raw local `codex app-server generate-json-schema` output. The helper script
+`scripts/vendor_protocol_schema.py` rewrites the CLI output into sorted,
+deterministic JSON and refreshes `schema_snapshots/vendor_manifest.json`.
 
 Integration recordings belong under `golden_transcripts/` only after they have
 been sanitized, made deterministic, and reduced to the lines a test actually
