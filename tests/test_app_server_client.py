@@ -28,14 +28,17 @@ from codex_agent_sdk import (
 from codex_agent_sdk.generated.stable import (
     ApprovalsReviewer,
     AskForApproval,
+    ThreadArchiveResponse,
     ThreadForkResponse,
     ThreadListResponse,
     ThreadReadResponse,
     ThreadResumeResponse,
+    ThreadSetNameResponse,
     ThreadSortKey,
     ThreadSourceKind,
     ThreadStartParams,
     ThreadStartResponse,
+    ThreadUnarchiveResponse,
 )
 from codex_agent_sdk.rpc import JsonRpcNotification, JsonRpcRequest
 from codex_agent_sdk.testing import (
@@ -646,6 +649,102 @@ async def test_thread_read_wrapper_supports_include_turns_and_returns_typed_resp
     assert result.thread.id == "thread_123"
 
 
+@pytest.mark.asyncio
+async def test_thread_archive_wrapper_sends_expected_wire_shape_and_returns_typed_response(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "thread/archive",
+            save_as="thread_archive",
+            params={"threadId": "thread_archived"},
+        ),
+        send_response(request_ref="thread_archive", result={}),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_archive_wrapper_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.thread_archive(thread_id="thread_archived")
+
+    assert isinstance(result, ThreadArchiveResponse)
+    assert result.model_dump() == {}
+
+
+@pytest.mark.asyncio
+async def test_thread_unarchive_wrapper_sends_expected_wire_shape_and_returns_typed_response(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "thread/unarchive",
+            save_as="thread_unarchive",
+            params={"threadId": "thread_unarchived"},
+        ),
+        send_response(
+            request_ref="thread_unarchive",
+            result={"thread": _build_thread_payload(thread_id="thread_unarchived")},
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_unarchive_wrapper_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.thread_unarchive(thread_id="thread_unarchived")
+
+    assert isinstance(result, ThreadUnarchiveResponse)
+    assert result.thread.id == "thread_unarchived"
+
+
+@pytest.mark.asyncio
+async def test_thread_set_name_wrapper_sends_expected_wire_shape_and_returns_typed_response(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "thread/name/set",
+            save_as="thread_set_name",
+            params={
+                "name": "Investigation Scratchpad",
+                "threadId": "thread_named",
+            },
+        ),
+        send_response(request_ref="thread_set_name", result={}),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_set_name_wrapper_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.thread_set_name(
+            thread_id="thread_named",
+            name="Investigation Scratchpad",
+        )
+
+    assert isinstance(result, ThreadSetNameResponse)
+    assert result.model_dump() == {}
+
+
 def test_thread_start_wrapper_rejects_unknown_keyword_argument() -> None:
     client = AppServerClient()
     thread_start = cast(Any, client.thread_start)
@@ -684,6 +783,42 @@ def test_thread_read_wrapper_requires_thread_id_keyword() -> None:
 
     with pytest.raises(TypeError, match="thread_id"):
         thread_read()
+
+
+def test_thread_archive_wrapper_requires_thread_id_keyword() -> None:
+    client = AppServerClient()
+    thread_archive = cast(Any, client.thread_archive)
+
+    with pytest.raises(TypeError, match="thread_id"):
+        thread_archive()
+
+
+def test_thread_unarchive_wrapper_requires_thread_id_keyword() -> None:
+    client = AppServerClient()
+    thread_unarchive = cast(Any, client.thread_unarchive)
+
+    with pytest.raises(TypeError, match="thread_id"):
+        thread_unarchive()
+
+
+def test_thread_set_name_wrapper_requires_name_keyword() -> None:
+    client = AppServerClient()
+    thread_set_name = cast(Any, client.thread_set_name)
+
+    with pytest.raises(TypeError, match="name"):
+        thread_set_name(thread_id="thread_named")
+
+
+def test_thread_set_name_wrapper_rejects_unknown_keyword_argument() -> None:
+    client = AppServerClient()
+    thread_set_name = cast(Any, client.thread_set_name)
+
+    with pytest.raises(TypeError, match="unsupported"):
+        thread_set_name(
+            thread_id="thread_named",
+            name="Investigation Scratchpad",
+            unsupported=True,
+        )
 
 
 @pytest.mark.asyncio

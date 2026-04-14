@@ -31,6 +31,8 @@ from .generated.stable import (
     Personality,
     SandboxMode,
     ServiceTier,
+    ThreadArchiveParams,
+    ThreadArchiveResponse,
     ThreadForkParams,
     ThreadForkResponse,
     ThreadListParams,
@@ -39,10 +41,14 @@ from .generated.stable import (
     ThreadReadResponse,
     ThreadResumeParams,
     ThreadResumeResponse,
+    ThreadSetNameParams,
+    ThreadSetNameResponse,
     ThreadSortKey,
     ThreadSourceKind,
     ThreadStartParams,
     ThreadStartResponse,
+    ThreadUnarchiveParams,
+    ThreadUnarchiveResponse,
     TurnInterruptParams,
     TurnInterruptResponse,
     TurnStartParams,
@@ -446,6 +452,46 @@ class AppServerClient:
                 include_turns=include_turns,
             ),
             response_model=ThreadReadResponse,
+        )
+
+    async def thread_archive(
+        self,
+        *,
+        thread_id: str,
+    ) -> ThreadArchiveResponse:
+        """Archive one app-server thread."""
+
+        return await self.request(
+            "thread/archive",
+            ThreadArchiveParams(thread_id=thread_id),
+            response_model=ThreadArchiveResponse,
+        )
+
+    async def thread_unarchive(
+        self,
+        *,
+        thread_id: str,
+    ) -> ThreadUnarchiveResponse:
+        """Unarchive one app-server thread."""
+
+        return await self.request(
+            "thread/unarchive",
+            ThreadUnarchiveParams(thread_id=thread_id),
+            response_model=ThreadUnarchiveResponse,
+        )
+
+    async def thread_set_name(
+        self,
+        *,
+        thread_id: str,
+        name: str,
+    ) -> ThreadSetNameResponse:
+        """Set the server-side name for one app-server thread."""
+
+        return await self.request(
+            "thread/name/set",
+            ThreadSetNameParams(thread_id=thread_id, name=name),
+            response_model=ThreadSetNameResponse,
         )
 
     async def turn_start(self, **params: Any) -> TurnStartResponse:

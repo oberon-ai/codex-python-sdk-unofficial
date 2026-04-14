@@ -465,6 +465,18 @@ class AppServerClient:
         thread_id: str,
         include_turns: bool | None = None,
     ) -> ThreadReadResult: ...
+    async def thread_archive(self, *, thread_id: str) -> ThreadArchiveResult: ...
+    async def thread_unarchive(
+        self,
+        *,
+        thread_id: str,
+    ) -> ThreadUnarchiveResult: ...
+    async def thread_set_name(
+        self,
+        *,
+        thread_id: str,
+        name: str,
+    ) -> ThreadSetNameResult: ...
     async def turn_start(self, ...) -> TurnStartResult: ...
     async def turn_steer(self, ...) -> TurnSteerResult: ...
     async def turn_interrupt(self, ...) -> TurnInterruptResult: ...
@@ -507,6 +519,8 @@ Design notes:
 - `thread_fork(...)` is a thin typed branching helper over `thread/fork`; it does not invent a higher-level branch object or local lineage cache.
 - `thread_list(...)` exposes server-native pagination and filtering directly. The low-level layer passes `cursor`, `limit`, and other filters through unchanged and returns the server's `next_cursor` rather than auto-paging.
 - `thread_read(..., include_turns=True)` passes the history depth decision directly to the server instead of always hydrating turns.
+- `thread_archive(...)` and `thread_unarchive(...)` are thin lifecycle helpers over the stable `thread/archive` and `thread/unarchive` methods. They do not maintain any local archived-state cache.
+- The pinned stable schema exposes thread naming as `thread/name/set`, so the low-level helper is `thread_set_name(...)`. The SDK does not invent a broader `thread_rename(...)` alias or guess at extra naming semantics.
 - Notification subscriptions are independent. One slow or abandoned subscriber must not block other subscribers or the dispatcher task.
 - Notification subscription queues are bounded by default. If a subscriber falls behind and its queue fills, that subscription closes with `NotificationSubscriptionOverflowError` after any already-queued notifications are drained.
 - Unhandled server-request methods are surfaced to higher layers by default rather than rejected implicitly.
