@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 20.0
 DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
@@ -39,6 +40,8 @@ class AppServerConfig:
     client_title: str = "Codex Agent SDK"
     client_version: str = "0.0.0"
     experimental_api: bool = False
+    debug_logging: bool = False
+    debug_logger: logging.Logger | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(slots=True)

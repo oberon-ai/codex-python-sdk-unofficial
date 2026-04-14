@@ -30,6 +30,8 @@ class TimeoutPolicyTests(unittest.TestCase):
         self.assertEqual(config.startup_timeout, DEFAULT_TIMEOUT_POLICY.startup)
         self.assertEqual(config.shutdown_timeout, DEFAULT_TIMEOUT_POLICY.shutdown)
         self.assertFalse(config.experimental_api)
+        self.assertFalse(config.debug_logging)
+        self.assertIsNone(config.debug_logger)
 
     def test_codex_options_defaults_to_explicit_none_values(self) -> None:
         options = CodexOptions()

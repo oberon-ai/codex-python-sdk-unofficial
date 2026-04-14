@@ -29,7 +29,7 @@ These names should be importable from `codex_agent_sdk`:
 | Name | Kind | Purpose |
 | --- | --- | --- |
 | `CodexOptions` | dataclass | High-level defaults for thread and turn behavior such as `model`, `cwd`, `approval_policy`, `sandbox_policy`, `effort`, and related stable options. |
-| `AppServerConfig` | dataclass | Process and protocol bootstrap options such as `codex_bin`, environment, startup timeouts, client identity, and `experimental_api=False`. |
+| `AppServerConfig` | dataclass | Process and protocol bootstrap options such as `codex_bin`, environment, startup timeouts, client identity, `experimental_api=False`, and opt-in debug logging hooks. |
 | `AppServerClient` | class | Low-level typed JSON-RPC client for `codex app-server --listen stdio://`. |
 | `CodexSDKClient` | class | High-level stateful client for thread workflows and streamed turn events. |
 | `TurnHandle` | class | Handle for one in-flight or completed turn, including event iteration and lifecycle helpers. |
@@ -93,10 +93,13 @@ It should cover:
 - `client_title`
 - `client_version`
 - `experimental_api`
+- `debug_logging`
+- `debug_logger`
 
 Contract notes:
 
 - `experimental_api` defaults to `False`.
+- `debug_logging` defaults to `False`. When enabled, transport-layer diagnostics should stay redacted and truncated by default rather than dumping raw prompts, diffs, or environment values.
 - `AppServerConfig.cwd` controls the app-server process working directory and is distinct from `CodexOptions.cwd`, which is a per-thread or per-turn workspace override.
 - `startup_timeout` covers both subprocess launch and the initial `initialize` response wait. It is one startup budget, not two unrelated helper timeouts.
 - The low-level client performs the required handshake automatically: send `initialize`, then send `initialized`, then allow other methods.

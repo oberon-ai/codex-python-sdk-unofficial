@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
 import textwrap
 from pathlib import Path
@@ -465,6 +466,151 @@ async def test_write_stdin_envelope_writes_one_compact_jsonl_frame(
 
 
 @pytest.mark.asyncio
+async def test_debug_logging_records_redacted_lifecycle_and_frame_metadata(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    script = _write_executable_script(
+        tmp_path / "debug_logging_codex.py",
+        """
+        import json
+        import sys
+
+        print(
+            json.dumps(
+                {
+                    "method": "item/updated",
+                    "params": {
+                        "text": "agent text that should stay redacted",
+                        "path": "/private/repo/secret.txt",
+                        "diff": "@@ -1 +1 @@\\n-secret\\n+visible",
+                    },
+                }
+            ),
+            flush=True,
+        )
+        sys.stdin.read()
+        """,
+    )
+    logger = logging.getLogger("tests.codex_agent_sdk.transport_debug")
+    caplog.set_level(logging.DEBUG, logger=logger.name)
+
+    prompt = "Find the risky diff in this repository." * 6
+    transport = StdioTransport(
+        AppServerConfig(
+            codex_bin=str(script),
+            env={"MODE": "test", "API_TOKEN": "super-secret"},
+            debug_logging=True,
+            debug_logger=logger,
+        )
+    )
+
+    async with transport:
+        await transport.write_stdin_envelope(
+            {
+                "id": 11,
+                "method": "turn/start",
+                "params": {
+                    "prompt": prompt,
+                    "cwd": "/Users/kevin/private-repo",
+                    "env": {"OPENAI_API_KEY": "shh", "MODE": "test"},
+                },
+            }
+        )
+        envelope = await asyncio.wait_for(
+            transport.read_stdout_envelope(),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+    assert envelope is not None
+    assert envelope["method"] == "item/updated"
+
+    records = [record for record in caplog.records if record.name == logger.name]
+    assert [_record_extra(record, "codex_debug_event") for record in records] == [
+        "transport_starting",
+        "transport_started",
+        "jsonrpc_frame",
+        "jsonrpc_frame",
+        "transport_closing",
+        "transport_closed",
+    ]
+
+    start_record = records[0]
+    assert _record_extra(start_record, "codex_command") == (
+        script.name,
+        "app-server",
+        "--listen",
+        "stdio://",
+    )
+    assert _record_extra(start_record, "codex_cwd_set") is False
+    assert _record_extra(start_record, "codex_env_override_keys") == (
+        "<redacted-env-key>",
+        "MODE",
+    )
+
+    outbound_record = records[2]
+    assert _record_extra(outbound_record, "codex_direction") == "outbound"
+    assert _record_extra(outbound_record, "codex_kind") == "request"
+    assert _record_extra(outbound_record, "codex_request_id") == 11
+    assert _record_extra(outbound_record, "codex_method") == "turn/start"
+    outbound_preview = cast(
+        dict[str, object],
+        _record_extra(outbound_record, "codex_frame_preview"),
+    )
+    outbound_params = cast(dict[str, object], outbound_preview["params"])
+    assert outbound_params["prompt"] == f"<redacted prompt len={len(prompt)}>"
+    assert cast(str, outbound_params["cwd"]).startswith("<redacted cwd len=")
+    assert outbound_params["env"] == "<redacted env keys=2>"
+
+    inbound_record = records[3]
+    assert _record_extra(inbound_record, "codex_direction") == "inbound"
+    assert _record_extra(inbound_record, "codex_kind") == "notification"
+    assert _record_extra(inbound_record, "codex_request_id") is None
+    assert _record_extra(inbound_record, "codex_method") == "item/updated"
+    inbound_preview = cast(
+        dict[str, object],
+        _record_extra(inbound_record, "codex_frame_preview"),
+    )
+    inbound_params = cast(dict[str, object], inbound_preview["params"])
+    assert cast(str, inbound_params["text"]).startswith("<redacted text len=")
+    assert cast(str, inbound_params["path"]).startswith("<redacted path len=")
+    assert cast(str, inbound_params["diff"]).startswith("<redacted diff len=")
+
+    close_record = records[-1]
+    assert _record_extra(close_record, "codex_returncode") == 0
+
+
+@pytest.mark.asyncio
+async def test_debug_logging_is_silent_when_disabled(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    script = _write_executable_script(
+        tmp_path / "disabled_debug_logging_codex.py",
+        """
+        import sys
+
+        sys.stdin.read()
+        """,
+    )
+    logger = logging.getLogger("tests.codex_agent_sdk.transport_debug.disabled")
+    caplog.set_level(logging.DEBUG, logger=logger.name)
+
+    transport = StdioTransport(
+        AppServerConfig(
+            codex_bin=str(script),
+            debug_logging=False,
+            debug_logger=logger,
+        )
+    )
+
+    async with transport:
+        pass
+
+    assert [record for record in caplog.records if record.name == logger.name] == []
+
+
+@pytest.mark.asyncio
 async def test_write_stdin_envelope_serializes_concurrent_callers_until_first_drain_finishes(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -804,3 +950,7 @@ def _write_executable_script(path: Path, body: str) -> Path:
     path.write_text(script, encoding="utf-8")
     path.chmod(0o755)
     return path
+
+
+def _record_extra(record: logging.LogRecord, key: str) -> object:
+    return record.__dict__[key]

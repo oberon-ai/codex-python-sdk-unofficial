@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 
+from .._debug import DebugLogger
 from ..errors import (
     CodexNotFoundError,
     MessageDecodeError,
@@ -78,6 +79,10 @@ class StdioTransport:
         self._close_lock = asyncio.Lock()
         self._close_task: asyncio.Task[None] | None = None
         self._close_requested = False
+        self._debug = DebugLogger(
+            enabled=self.config.debug_logging,
+            logger=self.config.debug_logger,
+        )
 
     async def __aenter__(self) -> StdioTransport:
         await self.start()
@@ -224,6 +229,11 @@ class StdioTransport:
         self._stdout_eof = False
 
         startup_timeout = self.config.startup_timeout if timeout is None else timeout
+        self._debug.log_transport_starting(
+            command=command,
+            cwd=cwd,
+            env_overrides=self.config.env,
+        )
 
         try:
             process = await asyncio.wait_for(
@@ -238,35 +248,48 @@ class StdioTransport:
                 timeout=startup_timeout,
             )
         except TimeoutError as exc:
-            raise StartupTimeoutError(
+            timeout_error = StartupTimeoutError(
                 timeout_seconds=startup_timeout,
                 command=command,
                 cwd=cwd,
-            ) from exc
+            )
+            self._debug.log_transport_start_failed(command=command, error=timeout_error)
+            raise timeout_error from exc
         except FileNotFoundError as exc:
             if cwd is not None and exc.filename == cwd:
-                raise StartupError(
+                cwd_error = StartupError(
                     f"app-server working directory not found: {cwd}",
                     command=command,
                     cwd=cwd,
-                ) from exc
-            raise CodexNotFoundError(
+                )
+                self._debug.log_transport_start_failed(command=command, error=cwd_error)
+                raise cwd_error from exc
+            missing_binary_error = CodexNotFoundError(
                 exc.filename or command[0],
                 command=command,
                 cwd=cwd,
-            ) from exc
+            )
+            self._debug.log_transport_start_failed(command=command, error=missing_binary_error)
+            raise missing_binary_error from exc
         except NotADirectoryError as exc:
-            raise StartupError(
+            not_directory_error = StartupError(
                 f"app-server working directory is not a directory: {cwd}",
                 command=command,
                 cwd=cwd,
-            ) from exc
+            )
+            self._debug.log_transport_start_failed(command=command, error=not_directory_error)
+            raise not_directory_error from exc
         except OSError as exc:
-            raise StartupError(
+            os_error = StartupError(
                 f"failed to launch app-server: {exc.strerror or str(exc)}",
                 command=command,
                 cwd=cwd,
-            ) from exc
+            )
+            self._debug.log_transport_start_failed(command=command, error=os_error)
+            raise os_error from exc
+        except BaseException as exc:
+            self._debug.log_transport_start_failed(command=command, error=exc)
+            raise
 
         self._process = process
         self._last_pid = process.pid
@@ -274,6 +297,7 @@ class StdioTransport:
             self._drain_stderr(),
             name="codex-agent-sdk.stderr-drain",
         )
+        self._debug.log_transport_started(command=command, pid=process.pid)
 
         try:
             await self._probe_for_early_exit(
@@ -281,7 +305,8 @@ class StdioTransport:
                 cwd=cwd,
                 startup_timeout=startup_timeout,
             )
-        except BaseException:
+        except BaseException as exc:
+            self._debug.log_transport_start_failed(command=command, error=exc)
             await self._cleanup_failed_start()
             raise
 
@@ -304,10 +329,20 @@ class StdioTransport:
     async def read_stdout_envelope(self) -> JsonRpcEnvelope | None:
         """Read and parse the next raw JSON-RPC envelope from stdout."""
 
-        line = await self.read_stdout_line()
+        try:
+            line = await self.read_stdout_line()
+        except BaseException as exc:
+            self._debug.log_frame_read_failed(error=exc)
+            raise
         if line is None:
             return None
-        return parse_jsonrpc_envelope(line, stderr_tail=self.stderr_tail)
+        try:
+            envelope = parse_jsonrpc_envelope(line, stderr_tail=self.stderr_tail)
+        except BaseException as exc:
+            self._debug.log_frame_read_failed(error=exc, preview=line)
+            raise
+        self._debug.log_frame(direction="inbound", envelope=envelope)
+        return envelope
 
     async def write_stdin_envelope(self, envelope: JsonRpcEnvelope) -> None:
         """Serialize and flush one JSON-RPC envelope to stdin as exactly one frame."""
@@ -321,9 +356,13 @@ class StdioTransport:
                 stdin.write(frame)
                 await stdin.drain()
             except asyncio.CancelledError:
+                self._debug.log_frame_write_failed(
+                    envelope=envelope, error=asyncio.CancelledError()
+                )
                 await asyncio.shield(self._close_after_write_failure())
                 raise
             except (BrokenPipeError, ConnectionResetError, OSError, RuntimeError) as exc:
+                self._debug.log_frame_write_failed(envelope=envelope, error=exc)
                 error = TransportWriteError(
                     "failed to write JSON-RPC envelope to app-server stdin",
                     stderr_tail=self.stderr_tail,
@@ -332,6 +371,7 @@ class StdioTransport:
                 )
                 await self._close_after_write_failure()
                 raise error from exc
+            self._debug.log_frame(direction="outbound", envelope=envelope)
 
     async def close(self) -> None:
         """Terminate the subprocess and wait for local cleanup."""
@@ -346,6 +386,7 @@ class StdioTransport:
                     return
 
                 self._close_requested = True
+                self._debug.log_transport_closing(pid=self.pid, returncode=self.returncode)
                 close_task = asyncio.create_task(
                     self._close_impl(process=process, stderr_task=stderr_task),
                     name="codex-agent-sdk.transport-close",
@@ -467,10 +508,18 @@ class StdioTransport:
 
             if not await self._wait_for_process_exit(process, timeout=shutdown_timeout):
                 escalated = True
+                self._debug.log_transport_shutdown_escalation(
+                    signal_name="terminate",
+                    pid=process.pid,
+                )
                 with suppress(ProcessLookupError):
                     process.terminate()
 
                 if not await self._wait_for_process_exit(process, timeout=shutdown_timeout):
+                    self._debug.log_transport_shutdown_escalation(
+                        signal_name="kill",
+                        pid=process.pid,
+                    )
                     with suppress(ProcessLookupError):
                         process.kill()
 
@@ -485,6 +534,9 @@ class StdioTransport:
 
             if process.returncode not in (None, 0) and not escalated:
                 await self._build_process_exit_error(process.returncode)
+        except BaseException as exc:
+            self._debug.log_transport_close_failed(pid=process.pid, error=exc)
+            raise
         finally:
             if process.returncode is not None:
                 self._last_returncode = process.returncode
@@ -492,6 +544,8 @@ class StdioTransport:
                 self._process = None
             if process.returncode is not None and self._stderr_task is stderr_task:
                 self._stderr_task = None
+            if process.returncode is not None:
+                self._debug.log_transport_closed(pid=process.pid, returncode=process.returncode)
 
     async def _close_stdin(self, process: Process) -> None:
         stdin = process.stdin
