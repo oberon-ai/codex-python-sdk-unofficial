@@ -1,0 +1,12 @@
+{"action":"expect_request","method":"initialize","save_as":"initialize"}
+{"action":"send_response","request_ref":"initialize","result":{"protocolVersion":2,"serverInfo":{"name":"fake-codex-app-server","version":"0.0.0-test"},"capabilities":{"experimentalApi":false},"codexHome":"/tmp/fake-codex-home","platformFamily":"unix","platformOs":"linux"}}
+{"action":"expect_notification","method":"initialized"}
+{"action":"expect_request","method":"thread/start","save_as":"thread_start","params":{"ephemeral":true}}
+{"action":"send_response","request_ref":"thread_start","result":{"threadId":"thread_100","status":"idle","ephemeral":true,"path":null}}
+{"action":"send_notification","method":"thread/started","params":{"threadId":"thread_100","status":"idle","ephemeral":true}}
+{"action":"expect_request","method":"turn/start","save_as":"turn_start","params":{"threadId":"thread_100"}}
+{"action":"send_response","request_ref":"turn_start","result":{"turnId":"turn_100","threadId":"thread_100","status":"running"}}
+{"action":"send_notification","method":"turn/started","params":{"threadId":"thread_100","turnId":"turn_100","status":"running"}}
+{"action":"send_server_request","method":"approval/requested","request_id":"approval-1","params":{"threadId":"thread_100","turnId":"turn_100","kind":"command","command":["pytest","-q"]}}
+{"action":"expect_response","request_ref":"approval-1","result":{"decision":"approved"}}
+{"action":"send_notification","method":"turn/completed","params":{"threadId":"thread_100","turnId":"turn_100","status":"completed","usage":{"inputTokens":12,"outputTokens":34}}}

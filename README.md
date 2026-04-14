@@ -28,6 +28,10 @@ The dependency rationale and pinned repo toolchain live in [docs/dependency-poli
 Protocol fixture, schema snapshot, fake-server script, and golden transcript
 conventions live in [tests/fixtures/README.md](tests/fixtures/README.md).
 
+The reusable fake app-server harness and JSONL script format live in
+[`codex_agent_sdk.testing.fake_app_server`](src/codex_agent_sdk/testing/fake_app_server.py)
+and [tests/fixtures/fake_server_scripts/README.md](tests/fixtures/fake_server_scripts/README.md).
+
 ## Development
 
 Install the project in editable mode with dev tooling:
