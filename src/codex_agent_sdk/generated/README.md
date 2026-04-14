@@ -25,9 +25,10 @@ Contributor rules:
   schema pin, hashes, and stable-versus-experimental split.
 - Regenerate the checked-in stable models with
   `python scripts/generate_protocol_models.py`.
-- That script refreshes both:
+- That script refreshes all of:
   `codex_agent_sdk.generated.stable` and
-  `codex_agent_sdk.generated.stable_notification_registry`.
+  `codex_agent_sdk.generated.stable_notification_registry` and
+  `codex_agent_sdk.generated.stable_server_request_registry`.
 - Verify drift with
   `python scripts/generate_protocol_models.py --check`.
 

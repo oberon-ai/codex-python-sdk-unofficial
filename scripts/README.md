@@ -16,10 +16,13 @@ Current maintenance entrypoint:
     `tests/fixtures/schema_snapshots/vendor_manifest.json`.
 - `generate_protocol_models.py`
   - Regenerates or verifies the checked-in stable Pydantic wire models at
-    `src/codex_agent_sdk/generated/stable.py` and the derived stable
+    `src/codex_agent_sdk/generated/stable.py`, the derived stable
     notification registry at
-    `src/codex_agent_sdk/generated/stable_notification_registry.py` from the
-    pinned stable schema snapshot.
+    `src/codex_agent_sdk/generated/stable_notification_registry.py`, and the
+    derived stable server-request registry at
+    `src/codex_agent_sdk/generated/stable_server_request_registry.py` from the
+    pinned stable schema snapshot plus the repo's upstream-backed
+    server-request method inventory.
   - Enforces the repo convention that generated `BaseModel` classes use
     snake_case Python field names while preserving upstream wire aliases for
     validation and default serialization.

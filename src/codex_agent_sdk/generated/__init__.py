@@ -7,6 +7,7 @@ The current stable generated modules live at:
 
 - `codex_agent_sdk.generated.stable`
 - `codex_agent_sdk.generated.stable_notification_registry`
+- `codex_agent_sdk.generated.stable_server_request_registry`
 """
 
 __all__: list[str] = []

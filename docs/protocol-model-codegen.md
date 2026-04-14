@@ -12,6 +12,7 @@ The current codegen step is intentionally narrow:
 - output:
   `src/codex_agent_sdk/generated/stable.py`
   `src/codex_agent_sdk/generated/stable_notification_registry.py`
+  `src/codex_agent_sdk/generated/stable_server_request_registry.py`
 - generator:
   `datamodel-code-generator==0.56.0`
 
@@ -26,6 +27,10 @@ tasks:
 - a generated stable notification registry that maps exact method names such as
   `thread/started` and `item/agentMessage/delta` to their generated payload
   models
+- a generated stable server-request registry that maps exact interactive method
+  names such as `item/commandExecution/requestApproval`,
+  `item/tool/requestUserInput`, and `mcpServer/elicitation/request` to thin
+  handwritten params models in `codex_agent_sdk.protocol.server_requests`
 - shared wire payloads such as `Thread`, `Turn`, `ThreadItem`, `UserInput`,
   and `AskForApproval`
 
@@ -81,10 +86,11 @@ Regenerate the checked-in stable models:
 python scripts/generate_protocol_models.py
 ```
 
-That one command refreshes both:
+That one command refreshes all of:
 
 - `src/codex_agent_sdk/generated/stable.py`
 - `src/codex_agent_sdk/generated/stable_notification_registry.py`
+- `src/codex_agent_sdk/generated/stable_server_request_registry.py`
 
 Verify that the checked-in generated file is in sync:
 
@@ -103,11 +109,17 @@ The repo's stable-by-default direction still applies here:
 - experimental schema handling stays an explicit follow-on task
 - handwritten adapters still belong in `src/codex_agent_sdk/protocol/`
 
-The stable schema snapshot does **not** currently expose a typed JSON-RPC
-server-request union for approval or user-input requests. Those server-initiated
-requests therefore remain routed as raw `JsonRpcRequest` envelopes in the `rpc/`
-layer for now. The generated stable module still covers the schema-defined
-request params, responses, notifications, and shared payload types that later
-adapter layers need, while the separate generated notification registry gives
-the handwritten `protocol.registries` layer an easy-to-refresh method-to-model
-index without hand-maintaining wrapper-class names.
+The stable schema snapshot still does **not** expose a typed JSON-RPC
+server-request union for approval, elicitation, or user-input methods. This
+repo therefore keeps the split explicit:
+
+- `stable.py` provides the schema-defined shared payload types the server
+  request models can reuse
+- `codex_agent_sdk.protocol.server_requests` provides a small handwritten params
+  layer for the interactive server-request methods the upstream README
+  documents
+- `stable_server_request_registry.py` is a generated derived artifact that maps
+  exact method names onto those handwritten params models
+
+That keeps the raw `JsonRpcRequest` transport/RPC boundary intact while giving
+`protocol.registries` a deterministic method-to-model index for typed parsing.

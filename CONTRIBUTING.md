@@ -55,6 +55,7 @@ The first generated Python wire-model layer is checked in at:
 
 - `src/codex_agent_sdk/generated/stable.py`
 - `src/codex_agent_sdk/generated/stable_notification_registry.py`
+- `src/codex_agent_sdk/generated/stable_server_request_registry.py`
 
 It is generated from the pinned stable schema snapshot, not directly from a
 developer machine's live `codex` output.
@@ -71,8 +72,9 @@ Refresh them intentionally:
 python scripts/generate_protocol_models.py
 ```
 
-That one command regenerates both the stable wire models and the stable
-notification registry derived from them.
+That one command regenerates the stable wire models, the stable notification
+registry derived from them, and the stable server-request registry derived from
+the upstream method inventory plus handwritten server-request param models.
 
 The script fails fast if the installed `datamodel-code-generator` version does
 not match the repo pin in `requirements/codegen.txt`.
