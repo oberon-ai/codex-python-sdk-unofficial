@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal, TypeAlias, cast
 
+from .errors import InvalidApprovalDecisionError
 from .protocol.pydantic import dump_wire_value
 from .protocol.registries import (
     RawServerRequest,
@@ -215,7 +216,8 @@ class ApprovalDecision:
 
 
 ApprovalResponder: TypeAlias = Callable[[ApprovalDecision], Awaitable[None]]
-ApprovalHandler: TypeAlias = Callable[["ApprovalRequest"], Awaitable[ApprovalDecision]]
+ApprovalHandlerResult: TypeAlias = ApprovalDecision | None
+ApprovalHandler: TypeAlias = Callable[["ApprovalRequest"], Awaitable[ApprovalHandlerResult]]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -237,6 +239,8 @@ class ApprovalRequest:
     async def respond(self, decision: ApprovalDecision) -> None:
         """Send an approval decision back to the waiting turn."""
 
+        if not isinstance(decision, ApprovalDecision):
+            raise InvalidApprovalDecisionError(decision)
         if self._responder is None:
             raise NotImplementedError(
                 "Approval request responses are not wired until the client layer exists."
@@ -486,6 +490,7 @@ __all__ = [
     "ApprovalFileChange",
     "ApprovalFileSystemPermissions",
     "ApprovalHandler",
+    "ApprovalHandlerResult",
     "ApprovalPermissions",
     "ApprovalRequest",
     "CommandApprovalRequest",

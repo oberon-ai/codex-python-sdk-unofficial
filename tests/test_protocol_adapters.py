@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from codex_agent_sdk import ApprovalDecision, CommandApprovalRequest, adapt_approval_request
 from codex_agent_sdk.events import (
+    ApprovalRequestedEvent,
     RawNotificationEvent,
+    RawServerRequestEvent,
     ThreadStatusChangedEvent,
     TurnCompletedEvent,
 )
@@ -9,8 +12,10 @@ from codex_agent_sdk.generated.stable import ThreadTokenUsage, TurnCompletedNoti
 from codex_agent_sdk.protocol.adapters import (
     TurnEventAdapterState,
     adapt_turn_notification,
+    adapt_turn_server_request,
     build_turn_result,
 )
+from codex_agent_sdk.rpc import JsonRpcRequest
 
 
 def test_adapt_turn_notification_filters_other_turns_and_surfaces_thread_status() -> None:
@@ -72,6 +77,55 @@ def test_adapt_turn_notification_uses_raw_fallback_for_unadapted_target_turn_met
         "turnId": "turn_123",
         "plan": [{"step": "Reproduce failure", "status": "completed"}],
     }
+
+
+async def _capture_decision(decision: ApprovalDecision) -> None:
+    _ = decision
+
+
+def test_adapt_turn_server_request_surfaces_typed_approval_events() -> None:
+    request = JsonRpcRequest(
+        id="approval-1",
+        method="item/commandExecution/requestApproval",
+        params={
+            "threadId": "thread_123",
+            "turnId": "turn_123",
+            "itemId": "item_123",
+            "command": ["pytest", "-q"],
+        },
+        _params_present=True,
+    )
+    approval_request = adapt_approval_request(request, responder=_capture_decision)
+    assert isinstance(approval_request, CommandApprovalRequest)
+
+    event = adapt_turn_server_request(
+        request,
+        target_turn_id="turn_123",
+        approval_request=approval_request,
+    )
+
+    assert isinstance(event, ApprovalRequestedEvent)
+    assert event.request.turn_id == "turn_123"
+    assert event.request.item_id == "item_123"
+
+
+def test_adapt_turn_server_request_uses_raw_fallback_for_non_approval_requests() -> None:
+    event = adapt_turn_server_request(
+        {
+            "id": "input-1",
+            "method": "item/tool/requestUserInput",
+            "params": {
+                "threadId": "thread_123",
+                "turnId": "turn_123",
+                "questions": [{"id": "ticket", "header": "Ticket", "question": "Which ticket?"}],
+            },
+        },
+        target_turn_id="turn_123",
+    )
+
+    assert isinstance(event, RawServerRequestEvent)
+    assert event.method == "item/tool/requestUserInput"
+    assert event.request_id == "input-1"
 
 
 def test_build_turn_result_and_completion_event_preserve_terminal_state() -> None:

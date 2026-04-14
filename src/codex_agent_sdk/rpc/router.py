@@ -675,6 +675,121 @@ def _extract_notification_turn_id(params: Mapping[str, object]) -> str | None:
     return None
 
 
+@dataclass(frozen=True, slots=True)
+class _ServerRequestSubscriptionFilter:
+    method: str | None = None
+    thread_id: str | None = None
+    turn_id: str | None = None
+
+    def matches(self, request: JsonRpcRequest) -> bool:
+        if self.method is not None and request.method != self.method:
+            return False
+
+        if self.thread_id is None and self.turn_id is None:
+            return True
+
+        params = request.params if request.has_params else None
+        if not isinstance(params, Mapping):
+            return False
+
+        thread_id = _extract_server_request_thread_id(params)
+        turn_id = _extract_server_request_turn_id(params)
+
+        if self.thread_id is not None and thread_id != self.thread_id:
+            return False
+        if self.turn_id is not None and turn_id != self.turn_id:
+            return False
+        return True
+
+
+class JsonRpcServerRequestSubscription:
+    """One async server-request subscription owned by ``JsonRpcServerRequestRouter``."""
+
+    def __init__(
+        self,
+        *,
+        router: JsonRpcServerRequestRouter,
+        subscription_id: int,
+        method: str | None,
+        thread_id: str | None,
+        turn_id: str | None,
+    ) -> None:
+        self._router = router
+        self._subscription_id = subscription_id
+        self._filter = _ServerRequestSubscriptionFilter(
+            method=method,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        self._stream: _InboundMessageStream[JsonRpcRequest] = _InboundMessageStream()
+        self._closed = False
+
+    @property
+    def method(self) -> str | None:
+        return self._filter.method
+
+    @property
+    def thread_id(self) -> str | None:
+        return self._filter.thread_id
+
+    @property
+    def turn_id(self) -> str | None:
+        return self._filter.turn_id
+
+    @property
+    def is_closed(self) -> bool:
+        return self._stream.is_closed
+
+    @property
+    def terminal_error(self) -> BaseException | None:
+        return self._stream.terminal_error
+
+    def close(self) -> None:
+        """Close the subscription and unregister it from the parent router."""
+
+        self._router._unsubscribe(self._subscription_id)
+        self._close_from_router()
+
+    def iter_requests(self) -> AsyncIterator[JsonRpcRequest]:
+        return self._iter_requests()
+
+    def __aiter__(self) -> AsyncIterator[JsonRpcRequest]:
+        return self.iter_requests()
+
+    def _matches(self, request: JsonRpcRequest) -> bool:
+        return self._filter.matches(request)
+
+    async def _enqueue(self, request: JsonRpcRequest) -> bool:
+        return await self._stream.put(request)
+
+    def _close_from_router(self, *, error: BaseException | None = None) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        self._stream.close(error=error)
+
+    async def _iter_requests(self) -> AsyncIterator[JsonRpcRequest]:
+        try:
+            async for request in self._stream.iter_items():
+                yield request
+        finally:
+            self.close()
+
+
+def _extract_server_request_thread_id(params: Mapping[str, object]) -> str | None:
+    thread_id = params.get("threadId")
+    if isinstance(thread_id, str):
+        return thread_id
+    return None
+
+
+def _extract_server_request_turn_id(params: Mapping[str, object]) -> str | None:
+    turn_id = params.get("turnId")
+    if isinstance(turn_id, str):
+        return turn_id
+    return None
+
+
 class JsonRpcServerRequestRouter:
     """Route server-initiated requests to handlers or a raw pending-request stream."""
 
@@ -686,21 +801,27 @@ class JsonRpcServerRequestRouter:
     ) -> None:
         if unhandled_policy not in ("queue", "reject"):
             raise ValueError("unhandled_policy must be 'queue' or 'reject'")
-        self._stream: _InboundMessageStream[JsonRpcRequest] = _InboundMessageStream()
         self._response_sender = response_sender
         self._unhandled_policy = unhandled_policy
         self._pending_requests: dict[JsonRpcId, _PendingServerRequest] = {}
         self._handlers: dict[str, JsonRpcServerRequestHandler] = {}
+        self._fallback_handler: JsonRpcServerRequestHandler | None = None
         self._handler_tasks: set[asyncio.Task[None]] = set()
+        self._next_subscription_id = 0
+        self._subscriptions: weakref.WeakValueDictionary[int, JsonRpcServerRequestSubscription] = (
+            weakref.WeakValueDictionary()
+        )
+        self._closed = False
+        self._terminal_error: BaseException | None = None
         self._lock = asyncio.Lock()
 
     @property
     def is_closed(self) -> bool:
-        return self._stream.is_closed
+        return self._closed
 
     @property
     def terminal_error(self) -> BaseException | None:
-        return self._stream.terminal_error
+        return self._terminal_error
 
     @property
     def pending_count(self) -> int:
@@ -709,6 +830,10 @@ class JsonRpcServerRequestRouter:
     @property
     def unhandled_policy(self) -> ServerRequestUnhandledPolicy:
         return self._unhandled_policy
+
+    @property
+    def subscriber_count(self) -> int:
+        return len(self._subscriptions)
 
     def register_handler(self, method: str, handler: JsonRpcServerRequestHandler) -> None:
         """Register or replace one async handler for a server-request method."""
@@ -720,10 +845,17 @@ class JsonRpcServerRequestRouter:
 
         self._handlers.pop(method, None)
 
+    def set_fallback_handler(self, handler: JsonRpcServerRequestHandler | None) -> None:
+        """Install or clear the fallback handler used when no method handler exists."""
+
+        self._fallback_handler = handler
+
     async def route_request(self, request: JsonRpcRequest) -> None:
         await self._register_request(request)
 
         handler = self._handlers.get(request.method)
+        if handler is None:
+            handler = self._fallback_handler
         if handler is None:
             await self._handle_unhandled_request(request)
             return
@@ -783,13 +915,63 @@ class JsonRpcServerRequestRouter:
         return await self.resolve_request(request_id)
 
     def close(self, *, error: BaseException | None = None) -> None:
-        self._stream.close(error=error)
+        self._closed = True
+        if error is not None and self._terminal_error is None:
+            self._terminal_error = error
         self._pending_requests.clear()
         for task in tuple(self._handler_tasks):
             task.cancel()
+        for subscription in tuple(self._subscriptions.values()):
+            self._unsubscribe(subscription._subscription_id)
+            subscription._close_from_router(error=error)
 
     def iter_requests(self) -> AsyncIterator[JsonRpcRequest]:
-        return self._stream.iter_items()
+        return self.subscribe().iter_requests()
+
+    def subscribe(
+        self,
+        *,
+        method: str | None = None,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+    ) -> JsonRpcServerRequestSubscription:
+        """Subscribe to all unhandled server requests or one filtered subset."""
+
+        self._next_subscription_id += 1
+        subscription = JsonRpcServerRequestSubscription(
+            router=self,
+            subscription_id=self._next_subscription_id,
+            method=method,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+        if self._closed:
+            subscription._close_from_router(error=self._terminal_error)
+            return subscription
+
+        self._subscriptions[self._next_subscription_id] = subscription
+        return subscription
+
+    def subscribe_thread(
+        self,
+        thread_id: str,
+        *,
+        method: str | None = None,
+    ) -> JsonRpcServerRequestSubscription:
+        """Subscribe to unhandled server requests scoped to one thread id."""
+
+        return self.subscribe(method=method, thread_id=thread_id)
+
+    def subscribe_turn(
+        self,
+        turn_id: str,
+        *,
+        thread_id: str | None = None,
+        method: str | None = None,
+    ) -> JsonRpcServerRequestSubscription:
+        """Subscribe to unhandled server requests scoped to one turn id."""
+
+        return self.subscribe(method=method, thread_id=thread_id, turn_id=turn_id)
 
     async def _register_request(self, request: JsonRpcRequest) -> None:
         async with self._lock:
@@ -802,7 +984,7 @@ class JsonRpcServerRequestRouter:
 
     async def _handle_unhandled_request(self, request: JsonRpcRequest) -> None:
         if self._unhandled_policy == "queue":
-            await self._stream.put(request)
+            await self._publish_request(request)
             return
 
         await self.reject(
@@ -904,6 +1086,19 @@ class JsonRpcServerRequestRouter:
                 "server request handler task exited with an unexpected error",
                 exc_info=exc,
             )
+
+    async def _publish_request(self, request: JsonRpcRequest) -> None:
+        if self._closed:
+            return
+        for subscription in tuple(self._subscriptions.values()):
+            if not subscription._matches(request):
+                continue
+            queued = await subscription._enqueue(request)
+            if not queued:
+                self._unsubscribe(subscription._subscription_id)
+
+    def _unsubscribe(self, subscription_id: int) -> None:
+        self._subscriptions.pop(subscription_id, None)
 
 
 @dataclass(slots=True)
@@ -1039,6 +1234,7 @@ __all__ = [
     "JsonRpcRequestRegistry",
     "JsonRpcServerRequestHandler",
     "JsonRpcServerRequestRouter",
+    "JsonRpcServerRequestSubscription",
     "PendingJsonRpcRequest",
     "SERVER_REQUEST_NOT_HANDLED",
 ]

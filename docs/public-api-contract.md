@@ -183,6 +183,7 @@ async def query(
 ### Approval behavior
 
 - If `approval_handler` is provided, the SDK uses it to answer approval requests automatically.
+- An approval handler may return `None` to leave a request unhandled so it still surfaces in the event stream for manual response.
 - If `approval_handler` is omitted, the event stream includes `ApprovalRequestedEvent`.
 - `ApprovalRequestedEvent` must expose an async `respond(decision)` helper so callers can keep approval logic inline while iterating the stream.
 - If the caller never responds, the turn remains blocked in a visible way.
@@ -478,10 +479,41 @@ class AppServerClient:
         max_queue_size: int | None = None,
     ) -> JsonRpcNotificationSubscription: ...
     def iter_server_requests(self) -> AsyncIterator[JsonRpcRequest]: ...
+    def subscribe_server_requests(
+        self,
+        *,
+        method: str | None = None,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+    ) -> JsonRpcServerRequestSubscription: ...
+    def subscribe_thread_server_requests(
+        self,
+        thread_id: str,
+        *,
+        method: str | None = None,
+    ) -> JsonRpcServerRequestSubscription: ...
+    def subscribe_turn_server_requests(
+        self,
+        turn_id: str,
+        *,
+        thread_id: str | None = None,
+        method: str | None = None,
+    ) -> JsonRpcServerRequestSubscription: ...
+    def iter_approval_requests(
+        self,
+        *,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+    ) -> AsyncIterator[ApprovalRequest]: ...
     async def respond_server_request(
         self,
         request_id: JsonRpcId,
         result: object | None = None,
+    ) -> None: ...
+    async def respond_approval_request(
+        self,
+        request: ApprovalRequest | JsonRpcId,
+        decision: ApprovalDecision,
     ) -> None: ...
     async def reject_server_request(
         self,
@@ -497,6 +529,7 @@ class AppServerClient:
         handler: JsonRpcServerRequestHandler,
     ) -> None: ...
     def remove_server_request_handler(self, method: str) -> None: ...
+    def set_approval_handler(self, handler: ApprovalHandler | None) -> None: ...
 
     async def thread_start(
         self,
@@ -607,8 +640,13 @@ Design notes:
 - `subscribe_notifications(...)` creates one bounded queue-backed subscription for all notifications or a filtered subset by `method`, `thread_id`, and `turn_id`.
 - `subscribe_thread_notifications(...)` and `subscribe_turn_notifications(...)` are convenience wrappers intended for higher-level routing layers.
 - `iter_server_requests()` remains the raw escape hatch for unhandled server-initiated requests.
+- `subscribe_server_requests(...)`, `subscribe_thread_server_requests(...)`, and `subscribe_turn_server_requests(...)` provide filtered server-request subscriptions so higher-level routing can observe server requests without stealing the catch-all raw iterator permanently.
+- `iter_approval_requests(...)` is the typed manual approval stream layered over those subscriptions. It yields only approval requests that were not already answered by an approval callback or a more specific registered server-request handler.
 - `respond_server_request(...)` and `reject_server_request(...)` send low-level JSON-RPC replies tied to a pending server request id.
+- `respond_server_request(...)` serializes wire-ready payloads the same way `request()` and `notify()` do, so callers can safely pass immutable mappings or generated wire models.
+- `respond_approval_request(...)` is the typed approval-specific reply helper. It accepts either an `ApprovalRequest` object or a raw pending request id plus an `ApprovalDecision`, and it raises `ApprovalRequestExpiredError` if the approval was already resolved or answered.
 - `register_server_request_handler(...)` lets callers auto-handle specific server-request methods without consuming the raw stream for those handled requests.
+- `set_approval_handler(...)` installs a fallback approval callback for approval methods only. Method-specific server-request handlers still win first, and the approval handler can return `None` to leave a request unhandled so it stays visible to manual consumers or the turn event stream.
 - `thread_fork(...)` is a thin typed branching helper over `thread/fork`; it does not invent a higher-level branch object or local lineage cache.
 - `thread_list(...)` exposes server-native pagination and filtering directly. The low-level layer passes `cursor`, `limit`, and other filters through unchanged and returns the server's `next_cursor` rather than auto-paging.
 - `thread_read(..., include_turns=True)` passes the history depth decision directly to the server instead of always hydrating turns.
@@ -621,6 +659,7 @@ Design notes:
 - `turn_interrupt(..., thread_id=..., turn_id=...)` is the explicit cancellation request for one existing in-flight turn. The response only acknowledges that the interrupt request was accepted; callers should still watch notifications or higher-level turn events for terminal `interrupted` completion.
 - `wait_for_turn_completed(..., thread_id=..., turn_id=...)` is the low-level terminal waiter for one turn. It listens on turn-scoped notification subscriptions, ignores other turns, preserves the full typed `turn/completed` payload, and carries the latest observed per-turn token-usage snapshot so callers do not need to re-read history just to collect terminal state.
 - `iter_turn_events(..., thread_id=..., turn_id=...)` is the first low-level typed turn stream. It yields typed `TurnEvent` values for the target turn plus useful thread-scoped status changes for the same thread, ends cleanly after `turn/completed`, and propagates fatal connection failures instead of silently truncating the stream.
+- `iter_turn_events(...)` now also listens for unhandled turn-scoped server requests. Approval requests become `ApprovalRequestedEvent`, while other unhandled server requests on the same turn become `RawServerRequestEvent`.
 - `iter_turn_events(...)` is intentionally subscription-based. It starts at the current notification point and may miss events that were already emitted before the caller attached. The later high-level `CodexSDKClient.query()` flow is responsible for provisional pre-start routing that avoids that race.
 - Notification subscriptions are independent. One slow or abandoned subscriber must not block other subscribers or the dispatcher task.
 - Notification subscription queues are bounded by default. If a subscriber falls behind and its queue fills, that subscription closes with `NotificationSubscriptionOverflowError` after any already-queued notifications are drained.

@@ -24,6 +24,7 @@ from .router import (
     JsonRpcRequestRegistry,
     JsonRpcServerRequestHandler,
     JsonRpcServerRequestRouter,
+    JsonRpcServerRequestSubscription,
 )
 
 
@@ -177,8 +178,48 @@ class JsonRpcConnection:
     async def iter_server_requests(self) -> AsyncIterator[JsonRpcRequest]:
         """Iterate raw server-initiated JSON-RPC requests until close or failure."""
 
-        async for request in self._server_requests.iter_requests():
+        async for request in self.subscribe_server_requests():
             yield request
+
+    def subscribe_server_requests(
+        self,
+        *,
+        method: str | None = None,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+    ) -> JsonRpcServerRequestSubscription:
+        """Subscribe to all unhandled server requests or one filtered subset."""
+
+        return self._server_requests.subscribe(
+            method=method,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+
+    def subscribe_thread_server_requests(
+        self,
+        thread_id: str,
+        *,
+        method: str | None = None,
+    ) -> JsonRpcServerRequestSubscription:
+        """Subscribe to unhandled server requests scoped to one thread id."""
+
+        return self._server_requests.subscribe_thread(thread_id, method=method)
+
+    def subscribe_turn_server_requests(
+        self,
+        turn_id: str,
+        *,
+        thread_id: str | None = None,
+        method: str | None = None,
+    ) -> JsonRpcServerRequestSubscription:
+        """Subscribe to unhandled server requests scoped to one turn id."""
+
+        return self._server_requests.subscribe_turn(
+            turn_id,
+            thread_id=thread_id,
+            method=method,
+        )
 
     async def respond_server_request(
         self,
@@ -216,6 +257,14 @@ class JsonRpcConnection:
         """Remove one previously registered server-request handler if present."""
 
         self._server_requests.remove_handler(method)
+
+    def set_server_request_fallback_handler(
+        self,
+        handler: JsonRpcServerRequestHandler | None,
+    ) -> None:
+        """Install or clear the fallback handler for otherwise-unhandled requests."""
+
+        self._server_requests.set_fallback_handler(handler)
 
     async def close(self) -> None:
         """Close the connection and release all pending waiters."""

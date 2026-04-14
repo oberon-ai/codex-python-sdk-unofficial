@@ -11,12 +11,15 @@ from .._turn_aggregation import (
     build_turn_result,
     observe_turn_event,
 )
+from ..approvals import ApprovalRequest, adapt_approval_request
 from ..events import (
     AgentTextDeltaEvent,
+    ApprovalRequestedEvent,
     CommandOutputDeltaEvent,
     ItemCompletedEvent,
     ItemStartedEvent,
     RawNotificationEvent,
+    RawServerRequestEvent,
     ReasoningTextDeltaEvent,
     ThreadStatusChangedEvent,
     TokenUsageUpdatedEvent,
@@ -39,7 +42,14 @@ from ..generated.stable import (
     TurnStatus,
 )
 from ..rpc.jsonrpc import JsonRpcEnvelopeLike
-from .registries import RawServerNotification, TypedServerNotification, parse_server_notification
+from .registries import (
+    RawServerNotification,
+    RawServerRequest,
+    TypedServerNotification,
+    TypedServerRequest,
+    parse_server_notification,
+    parse_server_request,
+)
 
 
 def adapt_turn_notification(
@@ -168,6 +178,41 @@ def adapt_turn_notification(
     return raw_notification_event
 
 
+def adapt_turn_server_request(
+    request: JsonRpcEnvelopeLike,
+    *,
+    target_turn_id: str,
+    approval_request: ApprovalRequest | None = None,
+) -> TurnEvent | None:
+    """Adapt one server request into a public turn event when it matches one turn."""
+
+    approval_request = (
+        adapt_approval_request(request) if approval_request is None else approval_request
+    )
+    if approval_request is not None:
+        if approval_request.turn_id != target_turn_id:
+            return None
+        return ApprovalRequestedEvent(
+            thread_id=approval_request.thread_id,
+            turn_id=approval_request.turn_id,
+            item_id=approval_request.item_id,
+            request=approval_request,
+        )
+
+    parsed = parse_server_request(request)
+    request_turn_id = _extract_turn_id_from_server_request(parsed)
+    if request_turn_id != target_turn_id:
+        return None
+    request_id = (
+        parsed.request_id if isinstance(parsed, (TypedServerRequest, RawServerRequest)) else None
+    )
+    return RawServerRequestEvent(
+        method=parsed.method,
+        request_id=request_id,
+        params=parsed.envelope.params if parsed.envelope.has_params else None,
+    )
+
+
 def _extract_turn_id_from_typed_notification(notification: TypedServerNotification) -> str | None:
     params = notification.params
     direct_turn_id = getattr(params, "turn_id", None)
@@ -198,6 +243,16 @@ def _extract_turn_id_from_object(payload: object) -> str | None:
     return None
 
 
+def _extract_turn_id_from_server_request(
+    request: TypedServerRequest | RawServerRequest,
+) -> str | None:
+    if isinstance(request, TypedServerRequest):
+        direct_turn_id = getattr(request.params, "turn_id", None)
+        if isinstance(direct_turn_id, str):
+            return direct_turn_id
+    return _extract_turn_id_from_object(request.params)
+
+
 def _normalize_thread_status(status: ThreadStatus) -> str:
     raw_type = getattr(status.root, "type", None)
     if raw_type == "notLoaded":
@@ -217,6 +272,7 @@ def _normalize_turn_status(status: TurnStatus) -> str:
 
 __all__ = [
     "TurnEventAdapterState",
+    "adapt_turn_server_request",
     "adapt_turn_notification",
     "build_turn_result",
 ]

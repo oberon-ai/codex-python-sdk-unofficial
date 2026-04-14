@@ -87,6 +87,7 @@ async def test_server_request_router_can_fall_through_to_raw_stream() -> None:
 
     router.register_handler("item/fileChange/requestApproval", _handler)
     request_task = asyncio.create_task(_next_server_request(router))
+    await asyncio.sleep(0)
 
     await router.route_request(
         JsonRpcRequest(
@@ -106,9 +107,107 @@ async def test_server_request_router_can_fall_through_to_raw_stream() -> None:
 
 
 @pytest.mark.asyncio
+async def test_server_request_subscriptions_can_coexist_and_filter() -> None:
+    router = JsonRpcServerRequestRouter()
+    catch_all = router.iter_requests()
+    thread_requests = router.subscribe_thread("thread_1").iter_requests()
+    turn_requests = router.subscribe_turn("turn_1", thread_id="thread_1").iter_requests()
+
+    await router.route_request(
+        JsonRpcRequest(
+            id="request-1",
+            method="item/fileChange/requestApproval",
+            params={"threadId": "thread_1", "turnId": "turn_1", "itemId": "item_1"},
+            _params_present=True,
+        )
+    )
+    await router.route_request(
+        JsonRpcRequest(
+            id="request-2",
+            method="item/tool/requestUserInput",
+            params={"threadId": "thread_1", "turnId": "turn_2"},
+            _params_present=True,
+        )
+    )
+    await router.route_request(
+        JsonRpcRequest(
+            id="request-3",
+            method="item/tool/call",
+            params={"threadId": "thread_2", "turnId": "turn_3"},
+            _params_present=True,
+        )
+    )
+
+    assert (await asyncio.wait_for(anext(catch_all), timeout=IO_TIMEOUT_SECONDS)).request_id == (
+        "request-1"
+    )
+    assert (await asyncio.wait_for(anext(catch_all), timeout=IO_TIMEOUT_SECONDS)).request_id == (
+        "request-2"
+    )
+    assert (await asyncio.wait_for(anext(catch_all), timeout=IO_TIMEOUT_SECONDS)).request_id == (
+        "request-3"
+    )
+    assert (
+        await asyncio.wait_for(anext(thread_requests), timeout=IO_TIMEOUT_SECONDS)
+    ).request_id == "request-1"
+    assert (
+        await asyncio.wait_for(anext(thread_requests), timeout=IO_TIMEOUT_SECONDS)
+    ).request_id == "request-2"
+    assert (
+        await asyncio.wait_for(anext(turn_requests), timeout=IO_TIMEOUT_SECONDS)
+    ).request_id == ("request-1")
+    assert router.subscriber_count == 3
+
+
+@pytest.mark.asyncio
+async def test_server_request_router_fallback_handler_only_handles_matching_requests() -> None:
+    sent_responses: list[object] = []
+
+    async def _send_response(envelope: object) -> None:
+        sent_responses.append(envelope)
+
+    router = JsonRpcServerRequestRouter(response_sender=_send_response)
+
+    async def _fallback_handler(request: JsonRpcRequest) -> object:
+        if request.method == "item/commandExecution/requestApproval":
+            return {"decision": "accept"}
+        return SERVER_REQUEST_NOT_HANDLED
+
+    router.set_fallback_handler(_fallback_handler)
+    request_task = asyncio.create_task(_next_server_request(router))
+    await asyncio.sleep(0)
+
+    await router.route_request(
+        JsonRpcRequest(
+            id="approval-4",
+            method="item/commandExecution/requestApproval",
+            params={"threadId": "thread_1", "turnId": "turn_1"},
+            _params_present=True,
+        )
+    )
+    await router.route_request(
+        JsonRpcRequest(
+            id="input-4",
+            method="item/tool/requestUserInput",
+            params={"threadId": "thread_1", "turnId": "turn_1"},
+            _params_present=True,
+        )
+    )
+
+    request = await asyncio.wait_for(request_task, timeout=IO_TIMEOUT_SECONDS)
+
+    assert sent_responses == [
+        JsonRpcSuccessResponse(id="approval-4", result={"decision": "accept"})
+    ]
+    assert request.method == "item/tool/requestUserInput"
+    assert request.request_id == "input-4"
+
+
+@pytest.mark.asyncio
 async def test_server_request_router_surfaces_unknown_requests_by_default() -> None:
     router = JsonRpcServerRequestRouter()
     request_task = asyncio.create_task(_next_server_request(router))
+    await asyncio.sleep(0)
 
     await router.route_request(
         JsonRpcRequest(
@@ -209,6 +308,7 @@ async def test_server_request_router_supports_manual_responses_and_state_trackin
 
     router = JsonRpcServerRequestRouter(response_sender=_send_response)
     request_task = asyncio.create_task(_next_server_request(router))
+    await asyncio.sleep(0)
 
     await router.route_request(
         JsonRpcRequest(

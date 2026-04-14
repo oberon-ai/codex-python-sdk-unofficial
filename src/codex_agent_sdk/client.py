@@ -8,18 +8,29 @@ later tasks, but the public names live here from the start.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Mapping, Sequence
+import logging
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from enum import StrEnum
 from typing import Any, TypeAlias, TypeVar, overload
 
-from .approvals import ApprovalHandler
+from .approvals import (
+    ApprovalDecision,
+    ApprovalHandler,
+    ApprovalRequest,
+    adapt_approval_request,
+)
 from .errors import (
     AlreadyInitializedError,
+    ApprovalCallbackError,
+    ApprovalRequestExpiredError,
     ClientStateError,
+    InvalidApprovalDecisionError,
     NotInitializedError,
     RequestTimeoutError,
+    ServerRequestAlreadyRespondedError,
     StartupTimeoutError,
     TransportClosedError,
+    UnknownServerRequestIdError,
 )
 from .events import TurnCompletedEvent, TurnEvent
 from .generated.stable import (
@@ -68,15 +79,26 @@ from .generated.stable import (
     UserInput5,
 )
 from .options import AppServerConfig, CodexOptions
-from .protocol.adapters import TurnEventAdapterState, adapt_turn_notification
+from .protocol.adapters import (
+    TurnEventAdapterState,
+    adapt_turn_notification,
+    adapt_turn_server_request,
+)
 from .protocol.initialize import InitializeResult, parse_initialize_result
 from .protocol.pydantic import dump_wire_value, validate_response_payload
 from .protocol.registries import TypedServerNotification, parse_server_notification
 from .results import TurnCompletion, TurnHandle
 from .rpc.connection import JsonRpcConnection
 from .rpc.jsonrpc import JsonRpcNotification, JsonRpcRequest
-from .rpc.router import JsonRpcNotificationSubscription, JsonRpcServerRequestHandler
+from .rpc.router import (
+    SERVER_REQUEST_NOT_HANDLED,
+    JsonRpcNotificationSubscription,
+    JsonRpcServerRequestHandler,
+    JsonRpcServerRequestSubscription,
+)
 from .transport import StdioTransport
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class _HandshakeState(StrEnum):
@@ -110,6 +132,7 @@ class AppServerClient:
         self._initialize_task: asyncio.Task[InitializeResult] | None = None
         self._handshake_state = _HandshakeState.CREATED
         self._initialize_result: InitializeResult | None = None
+        self._approval_handler: ApprovalHandler | None = None
 
     async def __aenter__(self) -> AppServerClient:
         return self
@@ -276,6 +299,57 @@ class AppServerClient:
 
         return self._connection.iter_server_requests()
 
+    def subscribe_server_requests(
+        self,
+        *,
+        method: str | None = None,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+    ) -> JsonRpcServerRequestSubscription:
+        """Subscribe to all unhandled server requests or one filtered subset."""
+
+        return self._connection.subscribe_server_requests(
+            method=method,
+            thread_id=thread_id,
+            turn_id=turn_id,
+        )
+
+    def subscribe_thread_server_requests(
+        self,
+        thread_id: str,
+        *,
+        method: str | None = None,
+    ) -> JsonRpcServerRequestSubscription:
+        """Subscribe to unhandled server requests scoped to one thread id."""
+
+        return self._connection.subscribe_thread_server_requests(thread_id, method=method)
+
+    def subscribe_turn_server_requests(
+        self,
+        turn_id: str,
+        *,
+        thread_id: str | None = None,
+        method: str | None = None,
+    ) -> JsonRpcServerRequestSubscription:
+        """Subscribe to unhandled server requests scoped to one turn id."""
+
+        return self._connection.subscribe_turn_server_requests(
+            turn_id,
+            thread_id=thread_id,
+            method=method,
+        )
+
+    def iter_approval_requests(
+        self,
+        *,
+        thread_id: str | None = None,
+        turn_id: str | None = None,
+    ) -> AsyncIterator[ApprovalRequest]:
+        """Iterate typed approval requests that have not been auto-handled."""
+
+        self._require_initialized(method="approval request stream")
+        return _iter_approval_requests(self, thread_id=thread_id, turn_id=turn_id)
+
     async def respond_server_request(
         self,
         request_id: str | int | None,
@@ -284,7 +358,7 @@ class AppServerClient:
         """Send a success response for one pending server-initiated request."""
 
         self._require_initialized()
-        await self._connection.respond_server_request(request_id, result)
+        await self._connection.respond_server_request(request_id, dump_wire_value(result))
 
     async def reject_server_request(
         self,
@@ -301,7 +375,7 @@ class AppServerClient:
             request_id,
             code,
             message,
-            data=data,
+            data=dump_wire_value(data),
         )
 
     def register_server_request_handler(
@@ -317,6 +391,32 @@ class AppServerClient:
         """Remove one previously registered server-request handler if present."""
 
         self._connection.remove_server_request_handler(method)
+
+    def set_approval_handler(self, handler: ApprovalHandler | None) -> None:
+        """Install or clear the fallback approval callback for approval requests."""
+
+        self._approval_handler = handler
+        if handler is None:
+            self._connection.set_server_request_fallback_handler(None)
+            return
+        self._connection.set_server_request_fallback_handler(self._handle_approval_request)
+
+    async def respond_approval_request(
+        self,
+        request: ApprovalRequest | str | int | None,
+        decision: ApprovalDecision,
+    ) -> None:
+        """Send a typed approval decision for one pending approval request."""
+
+        self._require_initialized(method="approval response")
+        if not isinstance(decision, ApprovalDecision):
+            raise InvalidApprovalDecisionError(decision)
+
+        request_id = request.request_id if isinstance(request, ApprovalRequest) else request
+        try:
+            await self.respond_server_request(request_id, decision.as_wire_result())
+        except (UnknownServerRequestIdError, ServerRequestAlreadyRespondedError) as exc:
+            raise ApprovalRequestExpiredError(request_id) from exc
 
     async def thread_start(
         self,
@@ -760,6 +860,52 @@ class AppServerClient:
                 stderr_tail=self._connection.transport.stderr_tail,
             )
 
+    def _adapt_approval_request(self, request: JsonRpcRequest) -> ApprovalRequest | None:
+        return adapt_approval_request(
+            request,
+            responder=self._approval_responder_for(request.request_id),
+        )
+
+    def _approval_responder_for(
+        self,
+        request_id: str | int | None,
+    ) -> Callable[[ApprovalDecision], Awaitable[None]]:
+        async def _responder(decision: ApprovalDecision) -> None:
+            await self.respond_approval_request(request_id, decision)
+
+        return _responder
+
+    async def _handle_approval_request(self, request: JsonRpcRequest) -> object:
+        approval_request = self._adapt_approval_request(request)
+        if approval_request is None:
+            return SERVER_REQUEST_NOT_HANDLED
+
+        approval_handler = self._approval_handler
+        if approval_handler is None:
+            return SERVER_REQUEST_NOT_HANDLED
+
+        try:
+            decision = await approval_handler(approval_request)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            callback_error = ApprovalCallbackError(
+                approval_request.request_id,
+                original_error=exc,
+            )
+            _LOGGER.warning(str(callback_error), exc_info=exc)
+            return SERVER_REQUEST_NOT_HANDLED
+
+        if decision is None:
+            return SERVER_REQUEST_NOT_HANDLED
+
+        if not isinstance(decision, ApprovalDecision):
+            invalid_decision_error = InvalidApprovalDecisionError(decision)
+            _LOGGER.warning(str(invalid_decision_error))
+            return SERVER_REQUEST_NOT_HANDLED
+
+        return dump_wire_value(decision.as_wire_result())
+
 
 class CodexSDKClient:
     """High-level stateful client for thread and turn workflows."""
@@ -914,6 +1060,12 @@ async def _read_next_notification(
     return await anext(notifications)
 
 
+async def _read_next_server_request(
+    requests: AsyncIterator[JsonRpcRequest],
+) -> JsonRpcRequest:
+    return await anext(requests)
+
+
 async def _iter_turn_events(
     client: AppServerClient,
     *,
@@ -922,34 +1074,114 @@ async def _iter_turn_events(
 ) -> AsyncIterator[TurnEvent]:
     subscription = client.subscribe_thread_notifications(thread_id)
     notifications = subscription.iter_notifications()
+    server_request_subscription = client.subscribe_turn_server_requests(
+        turn_id,
+        thread_id=thread_id,
+    )
+    server_requests = server_request_subscription.iter_requests()
     adapter_state = TurnEventAdapterState()
     stream_completed = False
+    notification_task = asyncio.create_task(
+        _read_next_notification(notifications),
+        name=f"codex-agent-sdk.turn-notification:{turn_id}",
+    )
+    server_request_task = asyncio.create_task(
+        _read_next_server_request(server_requests),
+        name=f"codex-agent-sdk.turn-server-request:{turn_id}",
+    )
 
     try:
         while True:
-            try:
-                notification = await _read_next_notification(notifications)
-            except StopAsyncIteration:
-                if stream_completed:
-                    return
-                raise TransportClosedError(
-                    "app-server connection closed before turn stream completed "
-                    f"for turn_id={turn_id!r}",
-                    stderr_tail=client._connection.transport.stderr_tail,
-                ) from None
-
-            event = adapt_turn_notification(
-                notification,
-                target_turn_id=turn_id,
-                state=adapter_state,
+            done, _pending = await asyncio.wait(
+                {notification_task, server_request_task},
+                return_when=asyncio.FIRST_COMPLETED,
             )
-            if event is None:
-                continue
 
-            yield event
-            if isinstance(event, TurnCompletedEvent):
-                stream_completed = True
-                return
+            if server_request_task in done:
+                try:
+                    server_request = server_request_task.result()
+                except StopAsyncIteration:
+                    if stream_completed:
+                        return
+                    raise TransportClosedError(
+                        "app-server connection closed before turn stream completed "
+                        f"for turn_id={turn_id!r}",
+                        stderr_tail=client._connection.transport.stderr_tail,
+                    ) from None
+
+                server_request_task = asyncio.create_task(
+                    _read_next_server_request(server_requests),
+                    name=f"codex-agent-sdk.turn-server-request:{turn_id}",
+                )
+
+                approval_request = client._adapt_approval_request(server_request)
+                server_request_event = adapt_turn_server_request(
+                    server_request,
+                    target_turn_id=turn_id,
+                    approval_request=approval_request,
+                )
+                if server_request_event is not None:
+                    yield server_request_event
+
+            if notification_task in done:
+                try:
+                    notification = notification_task.result()
+                except StopAsyncIteration:
+                    if stream_completed:
+                        return
+                    raise TransportClosedError(
+                        "app-server connection closed before turn stream completed "
+                        f"for turn_id={turn_id!r}",
+                        stderr_tail=client._connection.transport.stderr_tail,
+                    ) from None
+
+                notification_task = asyncio.create_task(
+                    _read_next_notification(notifications),
+                    name=f"codex-agent-sdk.turn-notification:{turn_id}",
+                )
+
+                notification_event = adapt_turn_notification(
+                    notification,
+                    target_turn_id=turn_id,
+                    state=adapter_state,
+                )
+                if notification_event is not None:
+                    yield notification_event
+                    if isinstance(notification_event, TurnCompletedEvent):
+                        stream_completed = True
+                        return
+    finally:
+        notification_task.cancel()
+        server_request_task.cancel()
+        await asyncio.gather(
+            notification_task,
+            server_request_task,
+            return_exceptions=True,
+        )
+        subscription.close()
+        server_request_subscription.close()
+
+
+async def _iter_approval_requests(
+    client: AppServerClient,
+    *,
+    thread_id: str | None,
+    turn_id: str | None,
+) -> AsyncIterator[ApprovalRequest]:
+    if turn_id is not None:
+        subscription = client.subscribe_turn_server_requests(turn_id, thread_id=thread_id)
+    elif thread_id is not None:
+        subscription = client.subscribe_thread_server_requests(thread_id)
+    else:
+        subscription = client.subscribe_server_requests()
+
+    requests = subscription.iter_requests()
+    try:
+        async for request in requests:
+            approval_request = client._adapt_approval_request(request)
+            if approval_request is None:
+                continue
+            yield approval_request
     finally:
         subscription.close()
 

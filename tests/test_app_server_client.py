@@ -13,9 +13,14 @@ import pytest
 from codex_agent_sdk import (
     AgentTextDeltaEvent,
     AlreadyInitializedError,
+    ApprovalDecision,
+    ApprovalFileSystemPermissions,
+    ApprovalPermissions,
+    ApprovalRequestedEvent,
     AppServerClient,
     AppServerConfig,
     ClientStateError,
+    CommandApprovalRequest,
     CommandOutputDeltaEvent,
     DuplicateResponseError,
     InitializeResult,
@@ -25,6 +30,7 @@ from codex_agent_sdk import (
     JsonRpcServerError,
     NotInitializedError,
     RawNotificationEvent,
+    RawServerRequestEvent,
     ReasoningTextDeltaEvent,
     RequestTimeoutError,
     ResponseValidationError,
@@ -2239,6 +2245,375 @@ async def test_client_can_manually_respond_to_server_request(tmp_path: Path) -> 
             timeout=IO_TIMEOUT_SECONDS,
         )
         await client.respond_server_request(request.request_id, {"decision": "accept"})
+
+
+@pytest.mark.asyncio
+async def test_iter_approval_requests_yields_typed_requests_and_sends_permission_grants(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        send_server_request(
+            "item/permissions/requestApproval",
+            request_id="permissions-1",
+            params={
+                "threadId": "thread_approval_stream",
+                "turnId": "turn_approval_stream",
+                "itemId": "item_permissions",
+                "reason": "Grant write access for the workspace root.",
+                "permissions": {
+                    "fileSystem": {
+                        "write": ["/repo"],
+                    }
+                },
+            },
+        ),
+        expect_response(
+            request_ref="permissions-1",
+            result={
+                "permissions": {"fileSystem": {"write": ["/repo"]}},
+                "scope": "session",
+            },
+        ),
+        send_notification(
+            "serverRequest/resolved",
+            params={"threadId": "thread_approval_stream", "requestId": "permissions-1"},
+        ),
+        sleep_action(50),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="approval_request_iterator_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        approval_request = await asyncio.wait_for(
+            anext(
+                client.iter_approval_requests(
+                    thread_id="thread_approval_stream",
+                    turn_id="turn_approval_stream",
+                )
+            ),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+        await approval_request.respond(
+            ApprovalDecision.grant_permissions(
+                ApprovalPermissions(
+                    file_system=ApprovalFileSystemPermissions(
+                        write_paths=("/repo",),
+                        payload={"write": ["/repo"]},
+                    ),
+                    payload={"fileSystem": {"write": ["/repo"]}},
+                ),
+                scope="session",
+            )
+        )
+
+    assert approval_request.thread_id == "thread_approval_stream"
+    assert approval_request.turn_id == "turn_approval_stream"
+    assert approval_request.item_id == "item_permissions"
+
+
+@pytest.mark.asyncio
+async def test_iter_turn_events_surfaces_approval_requests_and_allows_inline_response(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        send_notification(
+            "turn/started",
+            params={
+                "threadId": "thread_turn_approval",
+                "turn": _build_turn_payload(turn_id="turn_turn_approval", status="inProgress"),
+            },
+        ),
+        sleep_action(50),
+        send_server_request(
+            "item/commandExecution/requestApproval",
+            request_id="approval-turn-1",
+            params={
+                "threadId": "thread_turn_approval",
+                "turnId": "turn_turn_approval",
+                "itemId": "item_command_approval",
+                "command": ["pytest", "-q"],
+                "reason": "Run the test suite.",
+            },
+        ),
+        expect_response(
+            request_ref="approval-turn-1",
+            result={"decision": "accept"},
+        ),
+        send_notification(
+            "serverRequest/resolved",
+            params={"threadId": "thread_turn_approval", "requestId": "approval-turn-1"},
+        ),
+        send_notification(
+            "turn/completed",
+            params={
+                "threadId": "thread_turn_approval",
+                "turn": _build_turn_payload(
+                    turn_id="turn_turn_approval",
+                    status="completed",
+                ),
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="turn_stream_manual_approval_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        events = client.iter_turn_events(
+            thread_id="thread_turn_approval",
+            turn_id="turn_turn_approval",
+        )
+
+        first_event = await asyncio.wait_for(anext(events), timeout=IO_TIMEOUT_SECONDS)
+        second_event = await asyncio.wait_for(anext(events), timeout=IO_TIMEOUT_SECONDS)
+        assert isinstance(first_event, TurnStartedEvent)
+        assert isinstance(second_event, ApprovalRequestedEvent)
+        assert isinstance(second_event.request, CommandApprovalRequest)
+        assert second_event.request.command == ("pytest", "-q")
+
+        await second_event.respond(ApprovalDecision.accept())
+
+        completion_event = await asyncio.wait_for(anext(events), timeout=IO_TIMEOUT_SECONDS)
+        assert isinstance(completion_event, TurnCompletedEvent)
+        assert completion_event.turn_status == "completed"
+
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(anext(events), timeout=IO_TIMEOUT_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_iter_turn_events_keeps_unhandled_approval_visible_when_callback_opts_out(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        send_notification(
+            "turn/started",
+            params={
+                "threadId": "thread_turn_opt_out",
+                "turn": _build_turn_payload(turn_id="turn_turn_opt_out", status="inProgress"),
+            },
+        ),
+        sleep_action(50),
+        send_server_request(
+            "item/fileChange/requestApproval",
+            request_id="approval-opt-out-1",
+            params={
+                "threadId": "thread_turn_opt_out",
+                "turnId": "turn_turn_opt_out",
+                "itemId": "item_file_change",
+                "reason": "Apply the patch.",
+            },
+        ),
+        expect_response(
+            request_ref="approval-opt-out-1",
+            result={"decision": "decline"},
+        ),
+        send_notification(
+            "serverRequest/resolved",
+            params={"threadId": "thread_turn_opt_out", "requestId": "approval-opt-out-1"},
+        ),
+        send_notification(
+            "turn/completed",
+            params={
+                "threadId": "thread_turn_opt_out",
+                "turn": _build_turn_payload(
+                    turn_id="turn_turn_opt_out",
+                    status="interrupted",
+                ),
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="turn_stream_approval_opt_out_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        callback_called = asyncio.Event()
+
+        async def _approval_handler(_request: Any) -> ApprovalDecision | None:
+            callback_called.set()
+            return None
+
+        client.set_approval_handler(_approval_handler)
+        await client.initialize()
+        events = client.iter_turn_events(
+            thread_id="thread_turn_opt_out",
+            turn_id="turn_turn_opt_out",
+        )
+
+        assert isinstance(
+            await asyncio.wait_for(anext(events), timeout=IO_TIMEOUT_SECONDS), TurnStartedEvent
+        )
+        approval_event = await asyncio.wait_for(anext(events), timeout=IO_TIMEOUT_SECONDS)
+        assert callback_called.is_set()
+        assert isinstance(approval_event, ApprovalRequestedEvent)
+        await approval_event.respond(ApprovalDecision.decline())
+        completion_event = await asyncio.wait_for(anext(events), timeout=IO_TIMEOUT_SECONDS)
+
+    assert isinstance(completion_event, TurnCompletedEvent)
+    assert completion_event.turn_status == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_iter_turn_events_stays_blocked_when_approval_is_ignored(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        send_notification(
+            "turn/started",
+            params={
+                "threadId": "thread_turn_ignored",
+                "turn": _build_turn_payload(turn_id="turn_turn_ignored", status="inProgress"),
+            },
+        ),
+        sleep_action(50),
+        send_server_request(
+            "item/fileChange/requestApproval",
+            request_id="approval-ignored-1",
+            params={
+                "threadId": "thread_turn_ignored",
+                "turnId": "turn_turn_ignored",
+                "itemId": "item_ignored",
+                "reason": "Apply the patch.",
+            },
+        ),
+        sleep_action(300),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="turn_stream_ignored_approval_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        events = client.iter_turn_events(
+            thread_id="thread_turn_ignored",
+            turn_id="turn_turn_ignored",
+        )
+
+        assert isinstance(
+            await asyncio.wait_for(anext(events), timeout=IO_TIMEOUT_SECONDS), TurnStartedEvent
+        )
+        approval_event = await asyncio.wait_for(anext(events), timeout=IO_TIMEOUT_SECONDS)
+        assert isinstance(approval_event, ApprovalRequestedEvent)
+
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(anext(events), timeout=0.05)
+
+
+@pytest.mark.asyncio
+async def test_approval_handler_auto_handles_request_before_turn_stream(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        send_notification(
+            "turn/started",
+            params={
+                "threadId": "thread_turn_callback",
+                "turn": _build_turn_payload(turn_id="turn_turn_callback", status="inProgress"),
+            },
+        ),
+        sleep_action(50),
+        send_server_request(
+            "item/commandExecution/requestApproval",
+            request_id="approval-callback-1",
+            params={
+                "threadId": "thread_turn_callback",
+                "turnId": "turn_turn_callback",
+                "itemId": "item_callback",
+                "command": ["pytest", "-q"],
+            },
+        ),
+        expect_response(
+            request_ref="approval-callback-1",
+            result={"decision": "accept"},
+        ),
+        send_notification(
+            "serverRequest/resolved",
+            params={"threadId": "thread_turn_callback", "requestId": "approval-callback-1"},
+        ),
+        send_server_request(
+            "item/tool/requestUserInput",
+            request_id="input-callback-1",
+            params={
+                "threadId": "thread_turn_callback",
+                "turnId": "turn_turn_callback",
+                "questions": [
+                    {
+                        "id": "ticket",
+                        "header": "Ticket",
+                        "question": "Which ticket?",
+                    }
+                ],
+            },
+        ),
+        send_notification(
+            "turn/completed",
+            params={
+                "threadId": "thread_turn_callback",
+                "turn": _build_turn_payload(turn_id="turn_turn_callback", status="completed"),
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="turn_stream_callback_approval_launcher.py",
+    )
+    callback_requests: list[str] = []
+
+    async def _approval_handler(request: Any) -> ApprovalDecision | None:
+        callback_requests.append(cast(Any, request).method)
+        return ApprovalDecision.accept()
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        client.set_approval_handler(_approval_handler)
+        await client.initialize()
+        events = await asyncio.wait_for(
+            _collect_async_events(
+                client.iter_turn_events(
+                    thread_id="thread_turn_callback",
+                    turn_id="turn_turn_callback",
+                )
+            ),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+    assert callback_requests == ["item/commandExecution/requestApproval"]
+    assert [type(event) for event in events] == [
+        TurnStartedEvent,
+        RawServerRequestEvent,
+        TurnCompletedEvent,
+    ]
+    raw_server_request_event = events[1]
+    assert isinstance(raw_server_request_event, RawServerRequestEvent)
+    assert raw_server_request_event.method == "item/tool/requestUserInput"
 
 
 @pytest.mark.asyncio

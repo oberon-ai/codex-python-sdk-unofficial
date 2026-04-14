@@ -32,6 +32,7 @@ from .router import (
     JsonRpcRequestRegistry,
     JsonRpcServerRequestHandler,
     JsonRpcServerRequestRouter,
+    JsonRpcServerRequestSubscription,
     PendingJsonRpcRequest,
 )
 
@@ -54,6 +55,7 @@ __all__ = [
     "JsonRpcResponseEnvelope",
     "JsonRpcServerRequestHandler",
     "JsonRpcServerRequestRouter",
+    "JsonRpcServerRequestSubscription",
     "JsonRpcSuccessResponse",
     "PendingJsonRpcRequest",
     "SERVER_REQUEST_NOT_HANDLED",
