@@ -443,7 +443,28 @@ class AppServerClient:
         model: str | None = None,
         ...
     ) -> ThreadResumeResult: ...
-    async def thread_fork(self, ...) -> ThreadForkResult: ...
+    async def thread_fork(
+        self,
+        *,
+        thread_id: str,
+        cwd: str | None = None,
+        model: str | None = None,
+        ...
+    ) -> ThreadForkResult: ...
+    async def thread_list(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int | None = None,
+        search_term: str | None = None,
+        ...
+    ) -> ThreadListResult: ...
+    async def thread_read(
+        self,
+        *,
+        thread_id: str,
+        include_turns: bool | None = None,
+    ) -> ThreadReadResult: ...
     async def turn_start(self, ...) -> TurnStartResult: ...
     async def turn_steer(self, ...) -> TurnSteerResult: ...
     async def turn_interrupt(self, ...) -> TurnInterruptResult: ...
@@ -483,6 +504,9 @@ Design notes:
 - `iter_server_requests()` remains the raw escape hatch for unhandled server-initiated requests.
 - `respond_server_request(...)` and `reject_server_request(...)` send low-level JSON-RPC replies tied to a pending server request id.
 - `register_server_request_handler(...)` lets callers auto-handle specific server-request methods without consuming the raw stream for those handled requests.
+- `thread_fork(...)` is a thin typed branching helper over `thread/fork`; it does not invent a higher-level branch object or local lineage cache.
+- `thread_list(...)` exposes server-native pagination and filtering directly. The low-level layer passes `cursor`, `limit`, and other filters through unchanged and returns the server's `next_cursor` rather than auto-paging.
+- `thread_read(..., include_turns=True)` passes the history depth decision directly to the server instead of always hydrating turns.
 - Notification subscriptions are independent. One slow or abandoned subscriber must not block other subscribers or the dispatcher task.
 - Notification subscription queues are bounded by default. If a subscriber falls behind and its queue fills, that subscription closes with `NotificationSubscriptionOverflowError` after any already-queued notifications are drained.
 - Unhandled server-request methods are surfaced to higher layers by default rather than rejected implicitly.

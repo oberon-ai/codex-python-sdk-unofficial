@@ -28,7 +28,12 @@ from codex_agent_sdk import (
 from codex_agent_sdk.generated.stable import (
     ApprovalsReviewer,
     AskForApproval,
+    ThreadForkResponse,
+    ThreadListResponse,
+    ThreadReadResponse,
     ThreadResumeResponse,
+    ThreadSortKey,
+    ThreadSourceKind,
     ThreadStartParams,
     ThreadStartResponse,
 )
@@ -496,6 +501,151 @@ async def test_thread_resume_wrapper_sends_expected_wire_shape_and_returns_typed
     assert result.thread.id == "thread_resumed"
 
 
+@pytest.mark.asyncio
+async def test_thread_fork_wrapper_sends_expected_wire_shape_and_returns_typed_response(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "thread/fork",
+            save_as="thread_fork",
+            params={
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
+                "cwd": "/repo/forked",
+                "developerInstructions": "Fork carefully",
+                "ephemeral": False,
+                "model": "gpt-5.4",
+                "modelProvider": "openai",
+                "threadId": "thread_parent",
+            },
+        ),
+        send_response(
+            request_ref="thread_fork",
+            result=_build_thread_start_result(thread_id="thread_forked"),
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_fork_wrapper_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.thread_fork(
+            thread_id="thread_parent",
+            approval_policy=AskForApproval.model_validate("on-request"),
+            approvals_reviewer=ApprovalsReviewer.user,
+            cwd="/repo/forked",
+            developer_instructions="Fork carefully",
+            ephemeral=False,
+            model="gpt-5.4",
+            model_provider="openai",
+        )
+
+    assert isinstance(result, ThreadForkResponse)
+    assert result.thread.id == "thread_forked"
+
+
+@pytest.mark.asyncio
+async def test_thread_list_wrapper_supports_pagination_params_and_returns_typed_response(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "thread/list",
+            save_as="thread_list",
+            params={
+                "archived": False,
+                "cursor": "cursor_123",
+                "cwd": "/repo",
+                "limit": 2,
+                "modelProviders": ["openai", "azure"],
+                "searchTerm": "failing",
+                "sortKey": "updated_at",
+                "sourceKinds": ["appServer", "cli"],
+            },
+        ),
+        send_response(
+            request_ref="thread_list",
+            result={
+                "data": [
+                    _build_thread_payload(thread_id="thread_1"),
+                    _build_thread_payload(thread_id="thread_2"),
+                ],
+                "nextCursor": "cursor_456",
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_list_wrapper_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.thread_list(
+            archived=False,
+            cursor="cursor_123",
+            cwd="/repo",
+            limit=2,
+            model_providers=["openai", "azure"],
+            search_term="failing",
+            sort_key=ThreadSortKey.updated_at,
+            source_kinds=[ThreadSourceKind.app_server, ThreadSourceKind.cli],
+        )
+
+    assert isinstance(result, ThreadListResponse)
+    assert [thread.id for thread in result.data] == ["thread_1", "thread_2"]
+    assert result.next_cursor == "cursor_456"
+
+
+@pytest.mark.asyncio
+async def test_thread_read_wrapper_supports_include_turns_and_returns_typed_response(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "thread/read",
+            save_as="thread_read",
+            params={
+                "includeTurns": True,
+                "threadId": "thread_123",
+            },
+        ),
+        send_response(
+            request_ref="thread_read",
+            result={"thread": _build_thread_payload(thread_id="thread_123")},
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_read_wrapper_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.thread_read(
+            thread_id="thread_123",
+            include_turns=True,
+        )
+
+    assert isinstance(result, ThreadReadResponse)
+    assert result.thread.id == "thread_123"
+
+
 def test_thread_start_wrapper_rejects_unknown_keyword_argument() -> None:
     client = AppServerClient()
     thread_start = cast(Any, client.thread_start)
@@ -510,6 +660,30 @@ def test_thread_resume_wrapper_requires_thread_id_keyword() -> None:
 
     with pytest.raises(TypeError, match="thread_id"):
         thread_resume()
+
+
+def test_thread_fork_wrapper_requires_thread_id_keyword() -> None:
+    client = AppServerClient()
+    thread_fork = cast(Any, client.thread_fork)
+
+    with pytest.raises(TypeError, match="thread_id"):
+        thread_fork()
+
+
+def test_thread_list_wrapper_rejects_unknown_keyword_argument() -> None:
+    client = AppServerClient()
+    thread_list = cast(Any, client.thread_list)
+
+    with pytest.raises(TypeError, match="unsupported"):
+        thread_list(limit=1, unsupported=True)
+
+
+def test_thread_read_wrapper_requires_thread_id_keyword() -> None:
+    client = AppServerClient()
+    thread_read = cast(Any, client.thread_read)
+
+    with pytest.raises(TypeError, match="thread_id"):
+        thread_read()
 
 
 @pytest.mark.asyncio

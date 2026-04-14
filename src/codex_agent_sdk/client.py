@@ -33,8 +33,14 @@ from .generated.stable import (
     ServiceTier,
     ThreadForkParams,
     ThreadForkResponse,
+    ThreadListParams,
+    ThreadListResponse,
+    ThreadReadParams,
+    ThreadReadResponse,
     ThreadResumeParams,
     ThreadResumeResponse,
+    ThreadSortKey,
+    ThreadSourceKind,
     ThreadStartParams,
     ThreadStartResponse,
     TurnInterruptParams,
@@ -359,13 +365,87 @@ class AppServerClient:
             response_model=ThreadResumeResponse,
         )
 
-    async def thread_fork(self, **params: Any) -> ThreadForkResponse:
+    async def thread_fork(
+        self,
+        *,
+        thread_id: str,
+        approval_policy: AskForApproval | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        base_instructions: str | None = None,
+        config: dict[str, Any] | None = None,
+        cwd: str | None = None,
+        developer_instructions: str | None = None,
+        ephemeral: bool | None = None,
+        model: str | None = None,
+        model_provider: str | None = None,
+        sandbox: SandboxMode | None = None,
+        service_tier: ServiceTier | None = None,
+    ) -> ThreadForkResponse:
         """Fork an app-server thread."""
 
         return await self.request(
             "thread/fork",
-            ThreadForkParams(**params),
+            ThreadForkParams(
+                thread_id=thread_id,
+                approval_policy=approval_policy,
+                approvals_reviewer=approvals_reviewer,
+                base_instructions=base_instructions,
+                config=config,
+                cwd=cwd,
+                developer_instructions=developer_instructions,
+                ephemeral=ephemeral,
+                model=model,
+                model_provider=model_provider,
+                sandbox=sandbox,
+                service_tier=service_tier,
+            ),
             response_model=ThreadForkResponse,
+        )
+
+    async def thread_list(
+        self,
+        *,
+        archived: bool | None = None,
+        cursor: str | None = None,
+        cwd: str | None = None,
+        limit: int | None = None,
+        model_providers: list[str] | None = None,
+        search_term: str | None = None,
+        sort_key: ThreadSortKey | None = None,
+        source_kinds: list[ThreadSourceKind] | None = None,
+    ) -> ThreadListResponse:
+        """List app-server threads using the server's native filters and pagination."""
+
+        return await self.request(
+            "thread/list",
+            ThreadListParams(
+                archived=archived,
+                cursor=cursor,
+                cwd=cwd,
+                limit=limit,
+                model_providers=model_providers,
+                search_term=search_term,
+                sort_key=sort_key,
+                source_kinds=source_kinds,
+            ),
+            response_model=ThreadListResponse,
+        )
+
+    async def thread_read(
+        self,
+        *,
+        thread_id: str,
+        include_turns: bool | None = None,
+    ) -> ThreadReadResponse:
+        """Read one app-server thread, optionally asking the server to include turns."""
+
+        return await self.request(
+            "thread/read",
+            ThreadReadParams(
+                thread_id=thread_id,
+                include_turns=include_turns,
+            ),
+            response_model=ThreadReadResponse,
         )
 
     async def turn_start(self, **params: Any) -> TurnStartResponse:
