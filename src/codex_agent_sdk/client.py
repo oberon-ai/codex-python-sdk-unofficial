@@ -8,9 +8,9 @@ later tasks, but the public names live here from the start.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from enum import StrEnum
-from typing import Any, TypeVar, overload
+from typing import Any, TypeAlias, TypeVar, overload
 
 from .approvals import ApprovalHandler
 from .errors import (
@@ -29,7 +29,10 @@ from .generated.stable import (
     InitializeCapabilities,
     InitializeParams,
     Personality,
+    ReasoningEffort,
+    ReasoningSummary,
     SandboxMode,
+    SandboxPolicy,
     ServiceTier,
     ThreadArchiveParams,
     ThreadArchiveResponse,
@@ -55,6 +58,12 @@ from .generated.stable import (
     TurnStartResponse,
     TurnSteerParams,
     TurnSteerResponse,
+    UserInput,
+    UserInput1,
+    UserInput2,
+    UserInput3,
+    UserInput4,
+    UserInput5,
 )
 from .options import AppServerConfig, CodexOptions
 from .protocol.initialize import InitializeResult, parse_initialize_result
@@ -75,6 +84,16 @@ class _HandshakeState(StrEnum):
 
 
 ResponseModelT = TypeVar("ResponseModelT")
+TurnInputItemLike: TypeAlias = (
+    UserInput
+    | UserInput1
+    | UserInput2
+    | UserInput3
+    | UserInput4
+    | UserInput5
+    | Mapping[str, object]
+)
+TurnInputLike: TypeAlias = str | TurnInputItemLike | Sequence[TurnInputItemLike]
 
 
 class AppServerClient:
@@ -494,12 +513,40 @@ class AppServerClient:
             response_model=ThreadSetNameResponse,
         )
 
-    async def turn_start(self, **params: Any) -> TurnStartResponse:
-        """Start a turn on the active thread."""
+    async def turn_start(
+        self,
+        *,
+        thread_id: str,
+        input: TurnInputLike,
+        approval_policy: AskForApproval | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        cwd: str | None = None,
+        effort: ReasoningEffort | None = None,
+        model: str | None = None,
+        output_schema: Mapping[str, object] | None = None,
+        personality: Personality | None = None,
+        sandbox_policy: SandboxPolicy | Mapping[str, object] | None = None,
+        service_tier: ServiceTier | None = None,
+        summary: ReasoningSummary | None = None,
+    ) -> TurnStartResponse:
+        """Start a turn and return its initial metadata without waiting for completion."""
 
         return await self.request(
             "turn/start",
-            TurnStartParams(**params),
+            TurnStartParams(
+                thread_id=thread_id,
+                input=_coerce_turn_input_items(input),
+                approval_policy=approval_policy,
+                approvals_reviewer=approvals_reviewer,
+                cwd=cwd,
+                effort=effort,
+                model=model,
+                output_schema=output_schema,
+                personality=personality,
+                sandbox_policy=_coerce_sandbox_policy(sandbox_policy),
+                service_tier=service_tier,
+                summary=summary,
+            ),
             response_model=TurnStartResponse,
         )
 
@@ -773,3 +820,19 @@ def _remaining_startup_timeout(
         command=StdioTransport.build_command(config),
         cwd=config.cwd,
     )
+
+
+def _coerce_turn_input_items(input: TurnInputLike) -> list[UserInput]:
+    if isinstance(input, str):
+        return [UserInput.model_validate({"type": "text", "text": input})]
+    if isinstance(input, Sequence):
+        return [UserInput.model_validate(item) for item in input]
+    return [UserInput.model_validate(input)]
+
+
+def _coerce_sandbox_policy(
+    sandbox_policy: SandboxPolicy | Mapping[str, object] | None,
+) -> SandboxPolicy | None:
+    if sandbox_policy is None or isinstance(sandbox_policy, SandboxPolicy):
+        return sandbox_policy
+    return SandboxPolicy.model_validate(sandbox_policy)

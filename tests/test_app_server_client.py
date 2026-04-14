@@ -28,6 +28,11 @@ from codex_agent_sdk import (
 from codex_agent_sdk.generated.stable import (
     ApprovalsReviewer,
     AskForApproval,
+    Personality,
+    ReasoningEffort,
+    ReasoningSummary,
+    SandboxPolicy,
+    ServiceTier,
     ThreadArchiveResponse,
     ThreadForkResponse,
     ThreadListResponse,
@@ -39,6 +44,8 @@ from codex_agent_sdk.generated.stable import (
     ThreadStartParams,
     ThreadStartResponse,
     ThreadUnarchiveResponse,
+    TurnStartResponse,
+    UserInput,
 )
 from codex_agent_sdk.rpc import JsonRpcNotification, JsonRpcRequest
 from codex_agent_sdk.testing import (
@@ -745,6 +752,177 @@ async def test_thread_set_name_wrapper_sends_expected_wire_shape_and_returns_typ
     assert result.model_dump() == {}
 
 
+@pytest.mark.asyncio
+async def test_turn_start_wrapper_coerces_text_input_and_returns_promptly(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "turn/start",
+            save_as="turn_start",
+            params={
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
+                "cwd": "/repo",
+                "effort": "high",
+                "input": [{"type": "text", "text": "Find the failing tests."}],
+                "model": "gpt-5.4",
+                "outputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "string"},
+                    },
+                    "required": ["summary"],
+                    "additionalProperties": False,
+                },
+                "personality": "pragmatic",
+                "sandboxPolicy": {
+                    "type": "workspaceWrite",
+                    "networkAccess": True,
+                    "writableRoots": ["/repo"],
+                },
+                "serviceTier": "flex",
+                "summary": "detailed",
+                "threadId": "thread_turn_text",
+            },
+        ),
+        send_response(
+            request_ref="turn_start",
+            result=_build_turn_start_result(turn_id="turn_text"),
+        ),
+        sleep_action(300),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_turn_start_text_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        started_at = asyncio.get_running_loop().time()
+        result = await client.turn_start(
+            thread_id="thread_turn_text",
+            input="Find the failing tests.",
+            approval_policy=AskForApproval.model_validate("on-request"),
+            approvals_reviewer=ApprovalsReviewer.user,
+            cwd="/repo",
+            effort=ReasoningEffort.high,
+            model="gpt-5.4",
+            output_schema={
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+                "additionalProperties": False,
+            },
+            personality=Personality.pragmatic,
+            sandbox_policy=SandboxPolicy.model_validate(
+                {
+                    "type": "workspaceWrite",
+                    "networkAccess": True,
+                    "writableRoots": ["/repo"],
+                }
+            ),
+            service_tier=ServiceTier.flex,
+            summary=ReasoningSummary.model_validate("detailed"),
+        )
+        elapsed = asyncio.get_running_loop().time() - started_at
+
+    assert isinstance(result, TurnStartResponse)
+    assert result.turn.id == "turn_text"
+    assert result.turn.status == "inProgress"
+    assert elapsed < 0.2
+
+
+@pytest.mark.asyncio
+async def test_turn_start_wrapper_accepts_structured_input_items(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "turn/start",
+            save_as="turn_start",
+            params={
+                "threadId": "thread_turn_items",
+                "input": [
+                    {"type": "mention", "name": "github", "path": "app://github"},
+                    {"type": "text", "text": "Review the latest PR."},
+                    {"type": "localImage", "path": "/tmp/screenshot.png"},
+                ],
+            },
+        ),
+        send_response(
+            request_ref="turn_start",
+            result=_build_turn_start_result(turn_id="turn_items"),
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_turn_start_items_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.turn_start(
+            thread_id="thread_turn_items",
+            input=[
+                UserInput.model_validate(
+                    {"type": "mention", "name": "github", "path": "app://github"}
+                ),
+                {"type": "text", "text": "Review the latest PR."},
+                {"type": "localImage", "path": "/tmp/screenshot.png"},
+            ],
+        )
+
+    assert isinstance(result, TurnStartResponse)
+    assert result.turn.id == "turn_items"
+
+
+@pytest.mark.asyncio
+async def test_turn_start_wrapper_accepts_one_structured_input_item(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "turn/start",
+            save_as="turn_start",
+            params={
+                "threadId": "thread_turn_single_item",
+                "input": [{"type": "text", "text": "Focus on the smallest diff."}],
+            },
+        ),
+        send_response(
+            request_ref="turn_start",
+            result=_build_turn_start_result(turn_id="turn_single_item"),
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_turn_start_single_item_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.turn_start(
+            thread_id="thread_turn_single_item",
+            input={"type": "text", "text": "Focus on the smallest diff."},
+        )
+
+    assert isinstance(result, TurnStartResponse)
+    assert result.turn.id == "turn_single_item"
+
+
 def test_thread_start_wrapper_rejects_unknown_keyword_argument() -> None:
     client = AppServerClient()
     thread_start = cast(Any, client.thread_start)
@@ -817,6 +995,34 @@ def test_thread_set_name_wrapper_rejects_unknown_keyword_argument() -> None:
         thread_set_name(
             thread_id="thread_named",
             name="Investigation Scratchpad",
+            unsupported=True,
+        )
+
+
+def test_turn_start_wrapper_requires_thread_id_keyword() -> None:
+    client = AppServerClient()
+    turn_start = cast(Any, client.turn_start)
+
+    with pytest.raises(TypeError, match="thread_id"):
+        turn_start(input="Find the failing tests.")
+
+
+def test_turn_start_wrapper_requires_input_keyword() -> None:
+    client = AppServerClient()
+    turn_start = cast(Any, client.turn_start)
+
+    with pytest.raises(TypeError, match="input"):
+        turn_start(thread_id="thread_turn_text")
+
+
+def test_turn_start_wrapper_rejects_unknown_keyword_argument() -> None:
+    client = AppServerClient()
+    turn_start = cast(Any, client.turn_start)
+
+    with pytest.raises(TypeError, match="unsupported"):
+        turn_start(
+            thread_id="thread_turn_text",
+            input="Find the failing tests.",
             unsupported=True,
         )
 
@@ -1412,6 +1618,22 @@ def _build_thread_start_result(*, thread_id: str = "thread_123") -> dict[str, ob
         "sandbox": {"type": "dangerFullAccess"},
         "thread": _build_thread_payload(thread_id=thread_id),
     }
+
+
+def _build_turn_payload(
+    *,
+    turn_id: str = "turn_123",
+    status: str = "inProgress",
+) -> dict[str, object]:
+    return {
+        "id": turn_id,
+        "items": [],
+        "status": status,
+    }
+
+
+def _build_turn_start_result(*, turn_id: str = "turn_123") -> dict[str, object]:
+    return {"turn": _build_turn_payload(turn_id=turn_id)}
 
 
 def _write_fake_codex_launcher(

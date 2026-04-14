@@ -521,6 +521,8 @@ Design notes:
 - `thread_read(..., include_turns=True)` passes the history depth decision directly to the server instead of always hydrating turns.
 - `thread_archive(...)` and `thread_unarchive(...)` are thin lifecycle helpers over the stable `thread/archive` and `thread/unarchive` methods. They do not maintain any local archived-state cache.
 - The pinned stable schema exposes thread naming as `thread/name/set`, so the low-level helper is `thread_set_name(...)`. The SDK does not invent a broader `thread_rename(...)` alias or guess at extra naming semantics.
+- `turn_start(..., input=...)` accepts either a plain string, which the client wraps into one `{"type": "text", "text": ...}` user-input item, or one explicit structured input item or sequence of items validated through the generated stable `UserInput` model.
+- `turn_start(...)` returns the server-acknowledged initial `turn` metadata as soon as the `turn/start` response arrives. Completion still comes later through notifications and higher-level turn event adapters.
 - Notification subscriptions are independent. One slow or abandoned subscriber must not block other subscribers or the dispatcher task.
 - Notification subscription queues are bounded by default. If a subscriber falls behind and its queue fills, that subscription closes with `NotificationSubscriptionOverflowError` after any already-queued notifications are drained.
 - Unhandled server-request methods are surfaced to higher layers by default rather than rejected implicitly.
@@ -635,7 +637,15 @@ async with AppServerClient(AppServerConfig(codex_bin="codex")) as rpc:
     await rpc.initialize()
     thread = await rpc.thread_start(ephemeral=True)
     resumed = await rpc.thread_resume(thread_id=thread.thread.id, cwd="/repo")
-    raw_turn = await rpc.request("turn/start", {"threadId": thread.thread.id}, response_model=dict)
+    turn = await rpc.turn_start(thread_id=thread.thread.id, input="Find the failing tests.")
+    raw_turn = await rpc.request(
+        "turn/start",
+        {
+            "threadId": thread.thread.id,
+            "input": [{"type": "text", "text": "Find the failing tests."}],
+        },
+        response_model=dict,
+    )
 ```
 
 ## Explicit Non-Goals For The First Public Surface
