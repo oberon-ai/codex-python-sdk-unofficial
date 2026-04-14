@@ -98,12 +98,14 @@ It should cover:
 - `client_title`
 - `client_version`
 - `experimental_api`
+- `opt_out_notification_methods`
 - `debug_logging`
 - `debug_logger`
 
 Contract notes:
 
 - `experimental_api` defaults to `False`.
+- `opt_out_notification_methods` defaults to an empty tuple and maps to `initialize.params.capabilities.optOutNotificationMethods`.
 - `debug_logging` defaults to `False`. When enabled, transport-layer diagnostics should stay redacted and truncated by default rather than dumping raw prompts, diffs, or environment values.
 - `AppServerConfig.cwd` controls the app-server process working directory and is distinct from `CodexOptions.cwd`, which is a per-thread or per-turn workspace override.
 - `startup_timeout` covers both subprocess launch and the initial `initialize` response wait. It is one startup budget, not two unrelated helper timeouts.
@@ -368,6 +370,10 @@ Contract notes:
 ```python
 class AppServerClient:
     async def initialize(self) -> InitializeResult: ...
+    @property
+    def initialize_result(self) -> InitializeResult | None: ...
+    @property
+    def is_initialized(self) -> bool: ...
     async def request(
         self,
         method: str,
@@ -445,6 +451,9 @@ Low-level envelope iterators should yield typed envelope models rather than unst
 Design notes:
 
 - `initialize()` performs the full required handshake and returns the initialize result after the `initialized` notification has already been sent.
+- The initialize request is built from typed protocol models: `clientInfo` is always present, while `capabilities.experimentalApi` and `capabilities.optOutNotificationMethods` are included only when explicitly configured.
+- `request("initialize", ...)` and `notify("initialized", ...)` are reserved handshake operations rather than general raw-method escape hatches.
+- `initialize_result` exposes the cached typed handshake result without requiring a second initialize attempt.
 - `request()` and `notify()` are raw escape hatches.
 - `iter_notifications()` is the catch-all convenience view over the same notification bus used by filtered subscriptions.
 - `subscribe_notifications(...)` creates one bounded queue-backed subscription for all notifications or a filtered subset by `method`, `thread_id`, and `turn_id`.

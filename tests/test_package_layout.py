@@ -27,6 +27,7 @@ class PackageLayoutTests(unittest.TestCase):
             "codex_agent_sdk.generated.stable_notification_registry",
             "codex_agent_sdk.generated.stable_server_request_registry",
             "codex_agent_sdk.protocol",
+            "codex_agent_sdk.protocol.initialize",
             "codex_agent_sdk.protocol.pydantic",
             "codex_agent_sdk.protocol.registries",
             "codex_agent_sdk.protocol.server_requests",

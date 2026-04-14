@@ -9,22 +9,35 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from enum import StrEnum
 from typing import Any
 
 from .approvals import ApprovalHandler
 from .errors import (
     AlreadyInitializedError,
+    ClientStateError,
     NotInitializedError,
     RequestTimeoutError,
     StartupTimeoutError,
+    TransportClosedError,
 )
 from .events import TurnEvent
+from .generated.stable import ClientInfo, InitializeCapabilities, InitializeParams
 from .options import AppServerConfig, CodexOptions
+from .protocol.initialize import InitializeResult, parse_initialize_result
 from .results import TurnHandle
 from .rpc.connection import JsonRpcConnection
 from .rpc.jsonrpc import JsonRpcNotification, JsonRpcRequest
 from .rpc.router import JsonRpcNotificationSubscription, JsonRpcServerRequestHandler
 from .transport import StdioTransport
+
+
+class _HandshakeState(StrEnum):
+    CREATED = "created"
+    INITIALIZING = "initializing"
+    INITIALIZED = "initialized"
+    FAILED = "failed"
+    CLOSED = "closed"
 
 
 class AppServerClient:
@@ -34,8 +47,9 @@ class AppServerClient:
         self.config = config or AppServerConfig()
         self._connection = JsonRpcConnection(StdioTransport(self.config))
         self._initialize_lock = asyncio.Lock()
-        self._initialized = False
-        self._initialize_result: object | None = None
+        self._initialize_task: asyncio.Task[InitializeResult] | None = None
+        self._handshake_state = _HandshakeState.CREATED
+        self._initialize_result: InitializeResult | None = None
 
     async def __aenter__(self) -> AppServerClient:
         return self
@@ -52,53 +66,46 @@ class AppServerClient:
         """Close the underlying app-server connection."""
 
         await self._connection.close()
+        if self._handshake_state is not _HandshakeState.FAILED:
+            self._handshake_state = _HandshakeState.CLOSED
 
-    async def initialize(self) -> object:
+    @property
+    def initialize_result(self) -> InitializeResult | None:
+        """Return the cached initialize result after a successful handshake."""
+
+        return self._initialize_result
+
+    @property
+    def is_initialized(self) -> bool:
+        """Return ``True`` after ``initialize()`` has completed successfully."""
+
+        return self._handshake_state is _HandshakeState.INITIALIZED
+
+    async def initialize(self) -> InitializeResult:
         """Perform the required initialize then initialized handshake."""
 
-        if self._initialized:
+        if self._handshake_state is _HandshakeState.INITIALIZED:
             raise AlreadyInitializedError(-32002, "Already initialized", method="initialize")
 
+        if self._initialize_task is not None:
+            return await asyncio.shield(self._initialize_task)
+
+        self._raise_if_handshake_unavailable()
+
         async with self._initialize_lock:
-            if self._initialized:
+            if self._initialize_result is not None:
                 raise AlreadyInitializedError(-32002, "Already initialized", method="initialize")
-
-            deadline = asyncio.get_running_loop().time() + self.config.startup_timeout
-            try:
-                await self._connection.start(
-                    startup_timeout=_remaining_startup_timeout(
-                        deadline=deadline,
-                        config=self.config,
-                        stderr_tail=self._connection.transport.stderr_tail,
-                    )
+            if self._initialize_task is None:
+                self._handshake_state = _HandshakeState.INITIALIZING
+                self._initialize_task = asyncio.create_task(
+                    self._run_initialize_handshake(),
+                    name="codex-agent-sdk.initialize",
                 )
-                initialize_result = await self._connection.request(
-                    "initialize",
-                    _build_initialize_params(self.config),
-                    timeout=_remaining_startup_timeout(
-                        deadline=deadline,
-                        config=self.config,
-                        stderr_tail=self._connection.transport.stderr_tail,
-                    ),
-                )
-                await self._connection.notify("initialized", {})
-            except RequestTimeoutError as exc:
-                await self._connection.close()
-                raise StartupTimeoutError(
-                    timeout_seconds=self.config.startup_timeout,
-                    stderr_tail=self._connection.transport.stderr_tail,
-                    command=self._connection.transport.command,
-                    cwd=self._connection.transport.cwd,
-                ) from exc
-            except asyncio.CancelledError:
-                raise
-            except BaseException:
-                await self._connection.close()
-                raise
 
-            self._initialized = True
-            self._initialize_result = initialize_result
-            return initialize_result
+            task = self._initialize_task
+
+        assert task is not None
+        return await asyncio.shield(task)
 
     async def request(
         self,
@@ -109,13 +116,13 @@ class AppServerClient:
     ) -> object:
         """Send a raw JSON-RPC request over the app-server connection."""
 
-        self._require_initialized()
+        self._guard_outbound_request_method(method)
         return await self._connection.request(method, params, timeout=timeout)
 
     async def notify(self, method: str, params: object | None = None) -> None:
         """Send a raw JSON-RPC notification over the app-server connection."""
 
-        self._require_initialized()
+        self._guard_outbound_notification_method(method)
         await self._connection.notify(method, params)
 
     def iter_notifications(self) -> AsyncIterator[JsonRpcNotification]:
@@ -249,10 +256,94 @@ class AppServerClient:
 
         await self.request("turn/interrupt", params or None)
 
-    def _require_initialized(self) -> None:
-        if self._initialized:
+    async def _run_initialize_handshake(self) -> InitializeResult:
+        deadline = asyncio.get_running_loop().time() + self.config.startup_timeout
+        try:
+            await self._connection.start(
+                startup_timeout=_remaining_startup_timeout(
+                    deadline=deadline,
+                    config=self.config,
+                    stderr_tail=self._connection.transport.stderr_tail,
+                )
+            )
+            raw_result = await self._connection.request(
+                "initialize",
+                _build_initialize_params(self.config),
+                timeout=_remaining_startup_timeout(
+                    deadline=deadline,
+                    config=self.config,
+                    stderr_tail=self._connection.transport.stderr_tail,
+                ),
+            )
+            initialize_result = parse_initialize_result(raw_result)
+            await self._connection.notify("initialized", {})
+        except RequestTimeoutError as exc:
+            self._handshake_state = _HandshakeState.FAILED
+            await self._connection.close()
+            raise StartupTimeoutError(
+                timeout_seconds=self.config.startup_timeout,
+                stderr_tail=self._connection.transport.stderr_tail,
+                command=self._connection.transport.command,
+                cwd=self._connection.transport.cwd,
+            ) from exc
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            self._handshake_state = _HandshakeState.FAILED
+            await self._connection.close()
+            raise
+        finally:
+            self._initialize_task = None
+
+        self._initialize_result = initialize_result
+        self._handshake_state = _HandshakeState.INITIALIZED
+        return initialize_result
+
+    def _guard_outbound_request_method(self, method: str) -> None:
+        if method == "initialize":
+            if self._handshake_state is _HandshakeState.INITIALIZED:
+                raise AlreadyInitializedError(-32002, "Already initialized", method="initialize")
+            if self._handshake_state is _HandshakeState.INITIALIZING:
+                raise ClientStateError("initialize() is already in progress")
+            self._raise_if_handshake_unavailable()
+            raise ClientStateError(
+                "use AppServerClient.initialize() for the required initialize handshake"
+            )
+
+        if method == "initialized":
+            raise ClientStateError(
+                "'initialized' is reserved for the initialize handshake notification"
+            )
+
+        self._require_initialized(method=method)
+
+    def _guard_outbound_notification_method(self, method: str) -> None:
+        if method == "initialized":
+            raise ClientStateError(
+                "'initialized' is sent automatically after a successful initialize() call"
+            )
+        if method == "initialize":
+            raise ClientStateError(
+                "'initialize' is a JSON-RPC request and must be sent via initialize()"
+            )
+        self._require_initialized(method=method)
+
+    def _require_initialized(self, *, method: str | None = None) -> None:
+        if self._handshake_state is _HandshakeState.INITIALIZED:
             return
-        raise NotInitializedError(-32002, "Not initialized")
+        self._raise_if_handshake_unavailable()
+        raise NotInitializedError(-32002, "Not initialized", method=method)
+
+    def _raise_if_handshake_unavailable(self) -> None:
+        if self._handshake_state is _HandshakeState.FAILED:
+            error = self._connection.terminal_error
+            if error is not None:
+                raise error
+        if self._handshake_state is _HandshakeState.CLOSED:
+            raise TransportClosedError(
+                "app-server connection is already closed",
+                stderr_tail=self._connection.transport.stderr_tail,
+            )
 
 
 class CodexSDKClient:
@@ -368,21 +459,38 @@ class CodexSDKClient:
 __all__ = [
     "AppServerClient",
     "CodexSDKClient",
+    "InitializeResult",
 ]
 
 
 def _build_initialize_params(config: AppServerConfig) -> dict[str, object]:
-    params: dict[str, object] = {
-        "clientInfo": {
-            "name": config.client_name,
-            "title": config.client_title,
-            "version": config.client_version,
-        },
-        "protocolVersion": 2,
-    }
-    if config.experimental_api:
-        params["experimentalApi"] = True
-    return params
+    client_info = ClientInfo(
+        name=config.client_name,
+        title=config.client_title,
+        version=config.client_version,
+    )
+
+    capabilities: InitializeCapabilities | None = None
+    if config.experimental_api and config.opt_out_notification_methods:
+        capabilities = InitializeCapabilities(
+            experimental_api=True,
+            opt_out_notification_methods=list(config.opt_out_notification_methods),
+        )
+    elif config.experimental_api:
+        capabilities = InitializeCapabilities(experimental_api=True)
+    elif config.opt_out_notification_methods:
+        capabilities = InitializeCapabilities(
+            opt_out_notification_methods=list(config.opt_out_notification_methods),
+        )
+
+    if capabilities is None:
+        params = InitializeParams(client_info=client_info)
+    else:
+        params = InitializeParams(
+            client_info=client_info,
+            capabilities=capabilities,
+        )
+    return params.model_dump()
 
 
 def _remaining_startup_timeout(

@@ -14,6 +14,7 @@ from codex_agent_sdk import (
     AppServerConfig,
     CodexOptions,
     CodexSDKClient,
+    InitializeResult,
     OverloadRetryPolicy,
     TurnEvent,
     TurnHandle,
@@ -26,6 +27,7 @@ from codex_agent_sdk import (
 approvals_module = importlib.import_module("codex_agent_sdk.approvals")
 client_module = importlib.import_module("codex_agent_sdk.client")
 events_module = importlib.import_module("codex_agent_sdk.events")
+initialize_module = importlib.import_module("codex_agent_sdk.protocol.initialize")
 options_module = importlib.import_module("codex_agent_sdk.options")
 query_module = importlib.import_module("codex_agent_sdk.query")
 retry_module = importlib.import_module("codex_agent_sdk.retry")
@@ -46,6 +48,7 @@ class PublicBarrelTests(unittest.TestCase):
             "CodexOptions",
             "CodexSDKClient",
             "DEFAULT_OVERLOAD_RETRY_POLICY",
+            "InitializeResult",
             "OverloadRetryPolicy",
             "query",
             "ThreadStatusChangedEvent",
@@ -67,6 +70,7 @@ class PublicBarrelTests(unittest.TestCase):
         self.assertIs(ApprovalRequest, approvals_module.ApprovalRequest)
         self.assertIs(CodexOptions, options_module.CodexOptions)
         self.assertIs(DEFAULT_OVERLOAD_RETRY_POLICY, retry_module.DEFAULT_OVERLOAD_RETRY_POLICY)
+        self.assertIs(InitializeResult, initialize_module.InitializeResult)
         self.assertIs(OverloadRetryPolicy, retry_module.OverloadRetryPolicy)
         self.assertIs(TurnHandle, results_module.TurnHandle)
         self.assertIs(TurnResult, results_module.TurnResult)

@@ -87,6 +87,7 @@ from .options import (
     CodexOptions,
     TimeoutPolicy,
 )
+from .protocol.initialize import InitializeResult
 from .query import query
 from .results import TurnHandle, TurnResult
 from .retry import (
@@ -121,6 +122,7 @@ __all__ = [
     "DuplicateServerRequestIdError",
     "DuplicateResponseError",
     "InvalidApprovalDecisionError",
+    "InitializeResult",
     "ItemCompletedEvent",
     "ItemStartedEvent",
     "JsonRpcError",

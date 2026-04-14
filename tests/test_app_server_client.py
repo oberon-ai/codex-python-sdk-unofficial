@@ -10,10 +10,15 @@ from pathlib import Path
 import pytest
 
 from codex_agent_sdk import (
+    AlreadyInitializedError,
     AppServerClient,
     AppServerConfig,
+    ClientStateError,
     DuplicateResponseError,
+    InitializeResult,
+    NotInitializedError,
     RequestTimeoutError,
+    ResponseValidationError,
     StartupTimeoutError,
     TransportClosedError,
     UnknownResponseIdError,
@@ -34,6 +39,76 @@ from codex_agent_sdk.testing import (
 
 IO_TIMEOUT_SECONDS = 1.0
 FAKE_SERVER_MODULE = "codex_agent_sdk.testing.fake_app_server"
+
+
+@pytest.mark.asyncio
+async def test_initialize_sends_typed_params_and_returns_typed_result(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request(
+            "initialize",
+            save_as="initialize",
+            params={
+                "clientInfo": {
+                    "name": "custom_codex_client",
+                    "title": "Custom Codex Client",
+                    "version": "1.2.3",
+                },
+                "capabilities": {
+                    "experimentalApi": True,
+                    "optOutNotificationMethods": [
+                        "thread/started",
+                        "item/agentMessage/delta",
+                    ],
+                },
+            },
+        ),
+        send_response(
+            request_ref="initialize",
+            result={
+                "protocolVersion": 2,
+                "serverInfo": {
+                    "name": "fake-codex-app-server",
+                    "version": "0.0.0-test",
+                },
+                "capabilities": {"experimentalApi": False},
+                "codexHome": "/tmp/fake-codex-home",
+                "platformFamily": "unix",
+                "platformOs": "linux",
+                "userAgent": "fake-codex/0.0.0-test",
+            },
+        ),
+        expect_notification("initialized", params={}),
+    )
+    launcher = _write_fake_codex_launcher(tmp_path, script, stem="initialize_details_launcher.py")
+
+    async with AppServerClient(
+        AppServerConfig(
+            codex_bin=str(launcher),
+            client_name="custom_codex_client",
+            client_title="Custom Codex Client",
+            client_version="1.2.3",
+            experimental_api=True,
+            opt_out_notification_methods=(
+                "thread/started",
+                "item/agentMessage/delta",
+            ),
+        )
+    ) as client:
+        initialize_result = await client.initialize()
+
+        assert isinstance(initialize_result, InitializeResult)
+        assert client.is_initialized is True
+        assert client.initialize_result is initialize_result
+        assert initialize_result.protocol_version == 2
+        assert initialize_result.codex_home == "/tmp/fake-codex-home"
+        assert initialize_result.platform_family == "unix"
+        assert initialize_result.platform_os == "linux"
+        assert initialize_result.user_agent == "fake-codex/0.0.0-test"
+        assert initialize_result.server_info is not None
+        assert initialize_result.server_info.name == "fake-codex-app-server"
+        assert initialize_result.server_info.version == "0.0.0-test"
+        assert initialize_result.capabilities is not None
+        assert initialize_result.capabilities.experimental_api is False
 
 
 @pytest.mark.asyncio
@@ -64,6 +139,108 @@ async def test_initialize_uses_shared_startup_budget_for_initialize_response(
 
 
 @pytest.mark.asyncio
+async def test_request_before_initialize_is_blocked_locally(tmp_path: Path) -> None:
+    client = AppServerClient(AppServerConfig(codex_bin=str(tmp_path / "missing-codex-binary")))
+
+    try:
+        with pytest.raises(NotInitializedError) as exc_info:
+            await client.request("thread/start", {"ephemeral": True})
+    finally:
+        await client.close()
+
+    assert exc_info.value.method == "thread/start"
+
+
+@pytest.mark.asyncio
+async def test_raw_handshake_methods_are_reserved(tmp_path: Path) -> None:
+    client = AppServerClient(AppServerConfig(codex_bin=str(tmp_path / "missing-codex-binary")))
+
+    try:
+        with pytest.raises(ClientStateError, match="use AppServerClient.initialize"):
+            await client.request("initialize", {"clientInfo": {"name": "raw"}})
+
+        with pytest.raises(ClientStateError, match="sent automatically"):
+            await client.notify("initialized", {})
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_repeated_initialize_is_rejected_locally_after_success(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized", params={}),
+    )
+    launcher = _write_fake_codex_launcher(tmp_path, script, stem="repeat_initialize_launcher.py")
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        first = await client.initialize()
+
+        with pytest.raises(AlreadyInitializedError):
+            await client.initialize()
+
+    assert first.protocol_version == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_initialize_calls_share_one_handshake(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        sleep_action(50),
+        send_response(
+            request_ref="initialize",
+            result={"protocolVersion": 2, "codexHome": "/tmp/fake-codex-home"},
+        ),
+        expect_notification("initialized", params={}),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="concurrent_initialize_launcher.py",
+    )
+    client = AppServerClient(AppServerConfig(codex_bin=str(launcher)))
+
+    try:
+        first_task = asyncio.create_task(client.initialize())
+        await asyncio.sleep(0.01)
+        second_task = asyncio.create_task(client.initialize())
+
+        first, second = await asyncio.gather(first_task, second_task)
+    finally:
+        await client.close()
+
+    assert first is second
+    assert first.protocol_version == 2
+    assert first.codex_home == "/tmp/fake-codex-home"
+
+
+@pytest.mark.asyncio
+async def test_initialize_response_validation_failure_is_fatal(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(
+            request_ref="initialize",
+            result={"serverInfo": {"name": "fake-codex-app-server"}},
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="invalid_initialize_response_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        with pytest.raises(ResponseValidationError) as exc_info:
+            await client.initialize()
+
+        assert client.is_initialized is False
+        assert client.initialize_result is None
+
+    assert exc_info.value.method == "initialize"
+
+
+@pytest.mark.asyncio
 async def test_request_timeout_is_local_and_connection_remains_usable(tmp_path: Path) -> None:
     script = FakeAppServerScript.from_actions(
         expect_request("initialize", save_as="initialize"),
@@ -86,7 +263,7 @@ async def test_request_timeout_is_local_and_connection_remains_usable(tmp_path: 
 
     async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
         initialize_result = await client.initialize()
-        assert initialize_result == {"protocolVersion": 2}
+        assert initialize_result.protocol_version == 2
 
         with pytest.raises(RequestTimeoutError) as exc_info:
             await client.request("thread/start", {"ephemeral": True}, timeout=0.05)

@@ -40,6 +40,7 @@ class AppServerConfig:
     client_title: str = "Codex Agent SDK"
     client_version: str = "0.0.0"
     experimental_api: bool = False
+    opt_out_notification_methods: tuple[str, ...] = ()
     debug_logging: bool = False
     debug_logger: logging.Logger | None = field(default=None, repr=False, compare=False)
 
