@@ -18,6 +18,7 @@ from codex_agent_sdk import (
     DuplicateResponseError,
     InitializeResult,
     JsonRpcInvalidParamsError,
+    JsonRpcServerError,
     NotInitializedError,
     RequestTimeoutError,
     ResponseValidationError,
@@ -44,7 +45,9 @@ from codex_agent_sdk.generated.stable import (
     ThreadStartParams,
     ThreadStartResponse,
     ThreadUnarchiveResponse,
+    TurnInterruptResponse,
     TurnStartResponse,
+    TurnSteerResponse,
     UserInput,
 )
 from codex_agent_sdk.rpc import JsonRpcNotification, JsonRpcRequest
@@ -923,6 +926,133 @@ async def test_turn_start_wrapper_accepts_one_structured_input_item(
     assert result.turn.id == "turn_single_item"
 
 
+@pytest.mark.asyncio
+async def test_turn_steer_wrapper_coerces_text_input_and_returns_typed_response(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "turn/steer",
+            save_as="turn_steer",
+            params={
+                "expectedTurnId": "turn_active",
+                "input": [{"type": "text", "text": "Focus on the smallest diff."}],
+                "threadId": "thread_turn_text",
+            },
+        ),
+        send_response(
+            request_ref="turn_steer",
+            result={"turnId": "turn_active"},
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_turn_steer_text_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.turn_steer(
+            thread_id="thread_turn_text",
+            expected_turn_id="turn_active",
+            input="Focus on the smallest diff.",
+        )
+
+    assert isinstance(result, TurnSteerResponse)
+    assert result.turn_id == "turn_active"
+
+
+@pytest.mark.asyncio
+async def test_turn_steer_wrapper_preserves_non_steerable_turn_error(
+    tmp_path: Path,
+) -> None:
+    error_data = {
+        "activeTurnNotSteerable": {
+            "turnKind": "review",
+        }
+    }
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "turn/steer",
+            save_as="turn_steer",
+            params={
+                "expectedTurnId": "turn_review",
+                "input": [{"type": "text", "text": "Continue from the current review."}],
+                "threadId": "thread_review",
+            },
+        ),
+        send_response(
+            request_ref="turn_steer",
+            error={
+                "code": -32000,
+                "message": "active turn cannot accept same-turn steering",
+                "data": error_data,
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_turn_steer_non_steerable_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        with pytest.raises(JsonRpcServerError) as exc_info:
+            await client.turn_steer(
+                thread_id="thread_review",
+                expected_turn_id="turn_review",
+                input="Continue from the current review.",
+            )
+
+    assert exc_info.value.code == -32000
+    assert exc_info.value.method == "turn/steer"
+    assert exc_info.value.request_id == 2
+    assert exc_info.value.data == error_data
+
+
+@pytest.mark.asyncio
+async def test_turn_interrupt_wrapper_sends_expected_wire_shape_and_returns_typed_response(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "turn/interrupt",
+            save_as="turn_interrupt",
+            params={
+                "threadId": "thread_turn_interrupt",
+                "turnId": "turn_interrupt_me",
+            },
+        ),
+        send_response(request_ref="turn_interrupt", result={}),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_turn_interrupt_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.turn_interrupt(
+            thread_id="thread_turn_interrupt",
+            turn_id="turn_interrupt_me",
+        )
+
+    assert isinstance(result, TurnInterruptResponse)
+    assert result.model_dump() == {}
+
+
 def test_thread_start_wrapper_rejects_unknown_keyword_argument() -> None:
     client = AppServerClient()
     thread_start = cast(Any, client.thread_start)
@@ -1023,6 +1153,71 @@ def test_turn_start_wrapper_rejects_unknown_keyword_argument() -> None:
         turn_start(
             thread_id="thread_turn_text",
             input="Find the failing tests.",
+            unsupported=True,
+        )
+
+
+def test_turn_steer_wrapper_requires_thread_id_keyword() -> None:
+    client = AppServerClient()
+    turn_steer = cast(Any, client.turn_steer)
+
+    with pytest.raises(TypeError, match="thread_id"):
+        turn_steer(expected_turn_id="turn_active", input="Focus on the smallest diff.")
+
+
+def test_turn_steer_wrapper_requires_expected_turn_id_keyword() -> None:
+    client = AppServerClient()
+    turn_steer = cast(Any, client.turn_steer)
+
+    with pytest.raises(TypeError, match="expected_turn_id"):
+        turn_steer(thread_id="thread_turn_text", input="Focus on the smallest diff.")
+
+
+def test_turn_steer_wrapper_requires_input_keyword() -> None:
+    client = AppServerClient()
+    turn_steer = cast(Any, client.turn_steer)
+
+    with pytest.raises(TypeError, match="input"):
+        turn_steer(thread_id="thread_turn_text", expected_turn_id="turn_active")
+
+
+def test_turn_steer_wrapper_rejects_unknown_keyword_argument() -> None:
+    client = AppServerClient()
+    turn_steer = cast(Any, client.turn_steer)
+
+    with pytest.raises(TypeError, match="unsupported"):
+        turn_steer(
+            thread_id="thread_turn_text",
+            expected_turn_id="turn_active",
+            input="Focus on the smallest diff.",
+            unsupported=True,
+        )
+
+
+def test_turn_interrupt_wrapper_requires_thread_id_keyword() -> None:
+    client = AppServerClient()
+    turn_interrupt = cast(Any, client.turn_interrupt)
+
+    with pytest.raises(TypeError, match="thread_id"):
+        turn_interrupt(turn_id="turn_interrupt_me")
+
+
+def test_turn_interrupt_wrapper_requires_turn_id_keyword() -> None:
+    client = AppServerClient()
+    turn_interrupt = cast(Any, client.turn_interrupt)
+
+    with pytest.raises(TypeError, match="turn_id"):
+        turn_interrupt(thread_id="thread_turn_interrupt")
+
+
+def test_turn_interrupt_wrapper_rejects_unknown_keyword_argument() -> None:
+    client = AppServerClient()
+    turn_interrupt = cast(Any, client.turn_interrupt)
+
+    with pytest.raises(TypeError, match="unsupported"):
+        turn_interrupt(
+            thread_id="thread_turn_interrupt",
+            turn_id="turn_interrupt_me",
             unsupported=True,
         )
 

@@ -478,8 +478,19 @@ class AppServerClient:
         name: str,
     ) -> ThreadSetNameResult: ...
     async def turn_start(self, ...) -> TurnStartResult: ...
-    async def turn_steer(self, ...) -> TurnSteerResult: ...
-    async def turn_interrupt(self, ...) -> TurnInterruptResult: ...
+    async def turn_steer(
+        self,
+        *,
+        thread_id: str,
+        expected_turn_id: str,
+        input: str | InputItem | list[InputItem],
+    ) -> TurnSteerResult: ...
+    async def turn_interrupt(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+    ) -> TurnInterruptResult: ...
 ```
 
 ### Contract
@@ -523,6 +534,9 @@ Design notes:
 - The pinned stable schema exposes thread naming as `thread/name/set`, so the low-level helper is `thread_set_name(...)`. The SDK does not invent a broader `thread_rename(...)` alias or guess at extra naming semantics.
 - `turn_start(..., input=...)` accepts either a plain string, which the client wraps into one `{"type": "text", "text": ...}` user-input item, or one explicit structured input item or sequence of items validated through the generated stable `UserInput` model.
 - `turn_start(...)` returns the server-acknowledged initial `turn` metadata as soon as the `turn/start` response arrives. Completion still comes later through notifications and higher-level turn event adapters.
+- `turn_steer(..., expected_turn_id=..., input=...)` is the low-level same-turn control path for an already active in-flight turn. It reuses the same input-item coercion rules as `turn_start(...)`, but it does not create a new turn and it does not accept turn-level override knobs such as `model`, `cwd`, `approval_policy`, `summary`, or `output_schema`.
+- `turn_steer(...)` preserves server-side steerability failures as normal JSON-RPC errors, including method, request id, and structured error `data` when the current active turn cannot accept steering.
+- `turn_interrupt(..., thread_id=..., turn_id=...)` is the explicit cancellation request for one existing in-flight turn. The response only acknowledges that the interrupt request was accepted; callers should still watch notifications or higher-level turn events for terminal `interrupted` completion.
 - Notification subscriptions are independent. One slow or abandoned subscriber must not block other subscribers or the dispatcher task.
 - Notification subscription queues are bounded by default. If a subscriber falls behind and its queue fills, that subscription closes with `NotificationSubscriptionOverflowError` after any already-queued notifications are drained.
 - Unhandled server-request methods are surfaced to higher layers by default rather than rejected implicitly.
@@ -638,6 +652,15 @@ async with AppServerClient(AppServerConfig(codex_bin="codex")) as rpc:
     thread = await rpc.thread_start(ephemeral=True)
     resumed = await rpc.thread_resume(thread_id=thread.thread.id, cwd="/repo")
     turn = await rpc.turn_start(thread_id=thread.thread.id, input="Find the failing tests.")
+    steered = await rpc.turn_steer(
+        thread_id=thread.thread.id,
+        expected_turn_id=turn.turn.id,
+        input="Focus on the smallest reproducible failure.",
+    )
+    await rpc.turn_interrupt(
+        thread_id=thread.thread.id,
+        turn_id=steered.turn_id,
+    )
     raw_turn = await rpc.request(
         "turn/start",
         {

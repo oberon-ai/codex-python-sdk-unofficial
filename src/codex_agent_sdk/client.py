@@ -550,21 +550,36 @@ class AppServerClient:
             response_model=TurnStartResponse,
         )
 
-    async def turn_steer(self, **params: Any) -> TurnSteerResponse:
-        """Steer an in-flight turn."""
+    async def turn_steer(
+        self,
+        *,
+        thread_id: str,
+        expected_turn_id: str,
+        input: TurnInputLike,
+    ) -> TurnSteerResponse:
+        """Append input to one in-flight turn without starting a new turn."""
 
         return await self.request(
             "turn/steer",
-            TurnSteerParams(**params),
+            TurnSteerParams(
+                thread_id=thread_id,
+                expected_turn_id=expected_turn_id,
+                input=_coerce_turn_input_items(input),
+            ),
             response_model=TurnSteerResponse,
         )
 
-    async def turn_interrupt(self, **params: Any) -> TurnInterruptResponse:
-        """Interrupt an in-flight turn."""
+    async def turn_interrupt(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+    ) -> TurnInterruptResponse:
+        """Request interruption for one in-flight turn."""
 
         return await self.request(
             "turn/interrupt",
-            TurnInterruptParams(**params),
+            TurnInterruptParams(thread_id=thread_id, turn_id=turn_id),
             response_model=TurnInterruptResponse,
         )
 
