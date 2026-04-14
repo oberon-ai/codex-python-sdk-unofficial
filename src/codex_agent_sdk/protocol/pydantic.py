@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any, Generic, Literal, TypeVar
+from collections.abc import Callable, Mapping
+from typing import Any, Generic, Literal, TypeVar, cast
 
-from pydantic import BaseModel, ConfigDict, RootModel
+from pydantic import BaseModel, ConfigDict, RootModel, TypeAdapter, ValidationError
 from pydantic.main import IncEx
 
+from ..errors import ResponseValidationError
+
 RootValueT = TypeVar("RootValueT")
+ResponseModelT = TypeVar("ResponseModelT")
 
 
 class WireModel(BaseModel):
@@ -196,4 +199,51 @@ class WireRootModel(RootModel[RootValueT], Generic[RootValueT]):
         )
 
 
-__all__ = ["WireModel", "WireRootModel"]
+def dump_wire_value(value: object) -> object:
+    """Recursively dump BaseModel values into JSON-ready wire payloads."""
+
+    if isinstance(value, BaseModel):
+        return value.model_dump()
+    if isinstance(value, Mapping):
+        return {key: dump_wire_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [dump_wire_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [dump_wire_value(item) for item in value]
+    return value
+
+
+def validate_response_payload(
+    payload: object,
+    *,
+    method: str | None,
+    response_model: type[ResponseModelT],
+) -> ResponseModelT:
+    """Validate one raw response payload against the requested response model."""
+
+    if response_model is object:
+        return cast(ResponseModelT, payload)
+
+    try:
+        validated = TypeAdapter(response_model).validate_python(payload)
+    except ValidationError as exc:
+        raise ResponseValidationError(
+            (f"response payload failed validation against {_response_model_name(response_model)}"),
+            method=method,
+            payload=payload,
+        ) from exc
+
+    return validated
+
+
+def _response_model_name(response_model: type[object]) -> str:
+    return getattr(response_model, "__name__", repr(response_model))
+
+
+__all__ = [
+    "ResponseModelT",
+    "WireModel",
+    "WireRootModel",
+    "dump_wire_value",
+    "validate_response_payload",
+]

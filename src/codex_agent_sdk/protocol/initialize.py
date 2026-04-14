@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import ConfigDict, Field, ValidationError
+from pydantic import ConfigDict, Field
 
-from ..errors import ResponseValidationError
-from .pydantic import WireModel
+from .pydantic import WireModel, validate_response_payload
 
 
 class InitializeServerCapabilities(WireModel):
@@ -55,14 +54,11 @@ class InitializeResult(WireModel):
 def parse_initialize_result(payload: object) -> InitializeResult:
     """Validate one raw initialize result payload."""
 
-    try:
-        return InitializeResult.model_validate(payload)
-    except ValidationError as exc:
-        raise ResponseValidationError(
-            "initialize response payload failed validation",
-            method="initialize",
-            payload=payload,
-        ) from exc
+    return validate_response_payload(
+        payload,
+        method="initialize",
+        response_model=InitializeResult,
+    )
 
 
 __all__ = [

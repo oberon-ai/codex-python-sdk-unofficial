@@ -379,8 +379,9 @@ class AppServerClient:
         method: str,
         params: object | None = None,
         *,
+        response_model: type[ResponseT] | None = None,
         timeout: float | None = None,
-    ) -> object: ...
+    ) -> object | ResponseT: ...
     async def notify(self, method: str, params: object | None = None) -> None: ...
     def iter_notifications(self) -> AsyncIterator[JsonRpcNotification]: ...
     def subscribe_notifications(
@@ -432,7 +433,7 @@ class AppServerClient:
     async def thread_fork(self, ...) -> ThreadForkResult: ...
     async def turn_start(self, ...) -> TurnStartResult: ...
     async def turn_steer(self, ...) -> TurnSteerResult: ...
-    async def turn_interrupt(self, ...) -> None: ...
+    async def turn_interrupt(self, ...) -> TurnInterruptResult: ...
 ```
 
 ### Contract
@@ -454,7 +455,15 @@ Design notes:
 - The initialize request is built from typed protocol models: `clientInfo` is always present, while `capabilities.experimentalApi` and `capabilities.optOutNotificationMethods` are included only when explicitly configured.
 - `request("initialize", ...)` and `notify("initialized", ...)` are reserved handshake operations rather than general raw-method escape hatches.
 - `initialize_result` exposes the cached typed handshake result without requiring a second initialize attempt.
-- `request()` and `notify()` are raw escape hatches.
+- `request()` is the generic typed low-level helper: it accepts raw params or
+  generated wire models, serializes Pydantic models with wire aliases, and
+  optionally validates the result into the requested response model.
+- If `response_model` is omitted, `request()` returns the raw decoded JSON-RPC
+  result for escape-hatch use.
+- Callers can also ask for `response_model=dict` when they explicitly want a raw
+  dictionary while still going through the same helper.
+- JSON-RPC error responses still flow through the normal exception hierarchy.
+- `notify()` remains the raw low-level notification escape hatch.
 - `iter_notifications()` is the catch-all convenience view over the same notification bus used by filtered subscriptions.
 - `subscribe_notifications(...)` creates one bounded queue-backed subscription for all notifications or a filtered subset by `method`, `thread_id`, and `turn_id`.
 - `subscribe_thread_notifications(...)` and `subscribe_turn_notifications(...)` are convenience wrappers intended for higher-level routing layers.
@@ -573,8 +582,8 @@ from codex_agent_sdk import AppServerClient, AppServerConfig
 
 async with AppServerClient(AppServerConfig(codex_bin="codex")) as rpc:
     await rpc.initialize()
-    thread = await rpc.thread_start(...)
-    turn = await rpc.turn_start(...)
+    thread = await rpc.thread_start(ephemeral=True)
+    raw_turn = await rpc.request("turn/start", {"threadId": thread.thread.id}, response_model=dict)
 ```
 
 ## Explicit Non-Goals For The First Public Surface

@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from enum import StrEnum
-from typing import Any
+from typing import Any, TypeVar, overload
 
 from .approvals import ApprovalHandler
 from .errors import (
@@ -22,9 +22,26 @@ from .errors import (
     TransportClosedError,
 )
 from .events import TurnEvent
-from .generated.stable import ClientInfo, InitializeCapabilities, InitializeParams
+from .generated.stable import (
+    ClientInfo,
+    InitializeCapabilities,
+    InitializeParams,
+    ThreadForkParams,
+    ThreadForkResponse,
+    ThreadResumeParams,
+    ThreadResumeResponse,
+    ThreadStartParams,
+    ThreadStartResponse,
+    TurnInterruptParams,
+    TurnInterruptResponse,
+    TurnStartParams,
+    TurnStartResponse,
+    TurnSteerParams,
+    TurnSteerResponse,
+)
 from .options import AppServerConfig, CodexOptions
 from .protocol.initialize import InitializeResult, parse_initialize_result
+from .protocol.pydantic import dump_wire_value, validate_response_payload
 from .results import TurnHandle
 from .rpc.connection import JsonRpcConnection
 from .rpc.jsonrpc import JsonRpcNotification, JsonRpcRequest
@@ -38,6 +55,9 @@ class _HandshakeState(StrEnum):
     INITIALIZED = "initialized"
     FAILED = "failed"
     CLOSED = "closed"
+
+
+ResponseModelT = TypeVar("ResponseModelT")
 
 
 class AppServerClient:
@@ -107,17 +127,49 @@ class AppServerClient:
         assert task is not None
         return await asyncio.shield(task)
 
+    @overload
     async def request(
         self,
         method: str,
         params: object | None = None,
         *,
+        response_model: None = None,
         timeout: float | None = None,
-    ) -> object:
-        """Send a raw JSON-RPC request over the app-server connection."""
+    ) -> object: ...
+
+    @overload
+    async def request(
+        self,
+        method: str,
+        params: object | None = None,
+        *,
+        response_model: type[ResponseModelT],
+        timeout: float | None = None,
+    ) -> ResponseModelT: ...
+
+    async def request(
+        self,
+        method: str,
+        params: object | None = None,
+        *,
+        response_model: type[ResponseModelT] | None = None,
+        timeout: float | None = None,
+    ) -> object | ResponseModelT:
+        """Send one JSON-RPC request and optionally validate its typed result."""
 
         self._guard_outbound_request_method(method)
-        return await self._connection.request(method, params, timeout=timeout)
+        raw_result = await self._connection.request(
+            method,
+            dump_wire_value(params),
+            timeout=timeout,
+        )
+        if response_model is None:
+            return raw_result
+        return validate_response_payload(
+            raw_result,
+            method=method,
+            response_model=response_model,
+        )
 
     async def notify(self, method: str, params: object | None = None) -> None:
         """Send a raw JSON-RPC notification over the app-server connection."""
@@ -226,35 +278,59 @@ class AppServerClient:
 
         self._connection.remove_server_request_handler(method)
 
-    async def thread_start(self, **params: Any) -> object:
+    async def thread_start(self, **params: Any) -> ThreadStartResponse:
         """Start a new app-server thread."""
 
-        return await self.request("thread/start", params or None)
+        return await self.request(
+            "thread/start",
+            ThreadStartParams(**params),
+            response_model=ThreadStartResponse,
+        )
 
-    async def thread_resume(self, **params: Any) -> object:
+    async def thread_resume(self, **params: Any) -> ThreadResumeResponse:
         """Resume an existing app-server thread."""
 
-        return await self.request("thread/resume", params or None)
+        return await self.request(
+            "thread/resume",
+            ThreadResumeParams(**params),
+            response_model=ThreadResumeResponse,
+        )
 
-    async def thread_fork(self, **params: Any) -> object:
+    async def thread_fork(self, **params: Any) -> ThreadForkResponse:
         """Fork an app-server thread."""
 
-        return await self.request("thread/fork", params or None)
+        return await self.request(
+            "thread/fork",
+            ThreadForkParams(**params),
+            response_model=ThreadForkResponse,
+        )
 
-    async def turn_start(self, **params: Any) -> object:
+    async def turn_start(self, **params: Any) -> TurnStartResponse:
         """Start a turn on the active thread."""
 
-        return await self.request("turn/start", params or None)
+        return await self.request(
+            "turn/start",
+            TurnStartParams(**params),
+            response_model=TurnStartResponse,
+        )
 
-    async def turn_steer(self, **params: Any) -> object:
+    async def turn_steer(self, **params: Any) -> TurnSteerResponse:
         """Steer an in-flight turn."""
 
-        return await self.request("turn/steer", params or None)
+        return await self.request(
+            "turn/steer",
+            TurnSteerParams(**params),
+            response_model=TurnSteerResponse,
+        )
 
-    async def turn_interrupt(self, **params: Any) -> None:
+    async def turn_interrupt(self, **params: Any) -> TurnInterruptResponse:
         """Interrupt an in-flight turn."""
 
-        await self.request("turn/interrupt", params or None)
+        return await self.request(
+            "turn/interrupt",
+            TurnInterruptParams(**params),
+            response_model=TurnInterruptResponse,
+        )
 
     async def _run_initialize_handshake(self) -> InitializeResult:
         deadline = asyncio.get_running_loop().time() + self.config.startup_timeout

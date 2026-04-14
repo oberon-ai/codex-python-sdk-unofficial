@@ -16,6 +16,7 @@ from codex_agent_sdk import (
     ClientStateError,
     DuplicateResponseError,
     InitializeResult,
+    JsonRpcInvalidParamsError,
     NotInitializedError,
     RequestTimeoutError,
     ResponseValidationError,
@@ -23,6 +24,7 @@ from codex_agent_sdk import (
     TransportClosedError,
     UnknownResponseIdError,
 )
+from codex_agent_sdk.generated.stable import ThreadStartParams, ThreadStartResponse
 from codex_agent_sdk.rpc import JsonRpcNotification, JsonRpcRequest
 from codex_agent_sdk.testing import (
     FakeAppServerScript,
@@ -238,6 +240,185 @@ async def test_initialize_response_validation_failure_is_fatal(tmp_path: Path) -
         assert client.initialize_result is None
 
     assert exc_info.value.method == "initialize"
+
+
+@pytest.mark.asyncio
+async def test_typed_request_serializes_model_params_and_returns_typed_model(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "thread/start",
+            save_as="thread_start",
+            params={
+                "cwd": "/repo",
+                "ephemeral": True,
+                "model": "gpt-5.4",
+            },
+        ),
+        send_response(
+            request_ref="thread_start",
+            result=_build_thread_start_result(),
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_request_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.request(
+            "thread/start",
+            ThreadStartParams(
+                cwd="/repo",
+                ephemeral=True,
+                model="gpt-5.4",
+            ),
+            response_model=ThreadStartResponse,
+        )
+
+    assert isinstance(result, ThreadStartResponse)
+    assert result.model_dump()["approvalPolicy"] == "on-request"
+    assert result.thread.id == "thread_123"
+    assert result.thread.model_provider == "openai"
+
+
+@pytest.mark.asyncio
+async def test_typed_request_can_explicitly_return_raw_dict_escape_hatch(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request("thread/start", save_as="thread_start", params={"ephemeral": True}),
+        send_response(
+            request_ref="thread_start",
+            result=_build_thread_start_result(),
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="raw_dict_response_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.request(
+            "thread/start",
+            {"ephemeral": True},
+            response_model=dict,
+        )
+
+    assert isinstance(result, dict)
+    assert result["thread"]["id"] == "thread_123"
+    assert result["modelProvider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_typed_request_validation_failure_keeps_method_and_payload(
+    tmp_path: Path,
+) -> None:
+    invalid_result = {"approvalPolicy": "on-request"}
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request("thread/start", save_as="thread_start", params={"ephemeral": True}),
+        send_response(
+            request_ref="thread_start",
+            result=invalid_result,
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_request_validation_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        with pytest.raises(ResponseValidationError) as exc_info:
+            await client.request(
+                "thread/start",
+                {"ephemeral": True},
+                response_model=ThreadStartResponse,
+            )
+
+    assert exc_info.value.method == "thread/start"
+    assert exc_info.value.payload == invalid_result
+
+
+@pytest.mark.asyncio
+async def test_typed_request_preserves_jsonrpc_error_mapping_and_request_id(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request("thread/start", save_as="thread_start", params={"ephemeral": True}),
+        send_response(
+            request_ref="thread_start",
+            error={
+                "code": -32602,
+                "message": "bad thread/start params",
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_request_error_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        with pytest.raises(JsonRpcInvalidParamsError) as exc_info:
+            await client.request(
+                "thread/start",
+                {"ephemeral": True},
+                response_model=ThreadStartResponse,
+            )
+
+    assert exc_info.value.method == "thread/start"
+    assert exc_info.value.request_id == 2
+
+
+@pytest.mark.asyncio
+async def test_specific_rpc_wrapper_returns_generated_typed_response(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "thread/start",
+            save_as="thread_start",
+            params={"ephemeral": True},
+        ),
+        send_response(
+            request_ref="thread_start",
+            result=_build_thread_start_result(),
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_wrapper_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.thread_start(ephemeral=True)
+
+    assert isinstance(result, ThreadStartResponse)
+    assert result.thread.id == "thread_123"
 
 
 @pytest.mark.asyncio
@@ -803,6 +984,34 @@ async def test_notification_iterator_wakes_on_close_and_failure(tmp_path: Path) 
 
         with pytest.raises(TransportClosedError):
             await asyncio.wait_for(anext(notifications), timeout=IO_TIMEOUT_SECONDS)
+
+
+def _build_thread_payload() -> dict[str, object]:
+    return {
+        "cliVersion": "codex-cli 0.118.0",
+        "createdAt": 1_710_000_000,
+        "cwd": "/repo",
+        "ephemeral": True,
+        "id": "thread_123",
+        "modelProvider": "openai",
+        "preview": "Find the smallest failing test.",
+        "source": "appServer",
+        "status": {"type": "idle"},
+        "turns": [],
+        "updatedAt": 1_710_000_001,
+    }
+
+
+def _build_thread_start_result() -> dict[str, object]:
+    return {
+        "approvalPolicy": "on-request",
+        "approvalsReviewer": "user",
+        "cwd": "/repo",
+        "model": "gpt-5.4",
+        "modelProvider": "openai",
+        "sandbox": {"type": "dangerFullAccess"},
+        "thread": _build_thread_payload(),
+    }
 
 
 def _write_fake_codex_launcher(
