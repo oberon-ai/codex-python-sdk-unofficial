@@ -188,9 +188,12 @@ class _NotificationSubscriptionFilter:
         if not isinstance(params, Mapping):
             return False
 
-        if self.thread_id is not None and params.get("threadId") != self.thread_id:
+        thread_id = _extract_notification_thread_id(params)
+        turn_id = _extract_notification_turn_id(params)
+
+        if self.thread_id is not None and thread_id != self.thread_id:
             return False
-        if self.turn_id is not None and params.get("turnId") != self.turn_id:
+        if self.turn_id is not None and turn_id != self.turn_id:
             return False
         return True
 
@@ -642,6 +645,34 @@ class JsonRpcNotificationBus:
 
     def _unsubscribe(self, subscription_id: int) -> None:
         self._subscriptions.pop(subscription_id, None)
+
+
+def _extract_notification_thread_id(params: Mapping[str, object]) -> str | None:
+    direct_thread_id = params.get("threadId")
+    if isinstance(direct_thread_id, str):
+        return direct_thread_id
+
+    thread = params.get("thread")
+    if isinstance(thread, Mapping):
+        nested_thread_id = thread.get("id")
+        if isinstance(nested_thread_id, str):
+            return nested_thread_id
+
+    return None
+
+
+def _extract_notification_turn_id(params: Mapping[str, object]) -> str | None:
+    direct_turn_id = params.get("turnId")
+    if isinstance(direct_turn_id, str):
+        return direct_turn_id
+
+    turn = params.get("turn")
+    if isinstance(turn, Mapping):
+        nested_turn_id = turn.get("id")
+        if isinstance(nested_turn_id, str):
+            return nested_turn_id
+
+    return None
 
 
 class JsonRpcServerRequestRouter:

@@ -24,6 +24,7 @@ from codex_agent_sdk import (
     ResponseValidationError,
     StartupTimeoutError,
     TransportClosedError,
+    TurnCompletion,
     UnknownResponseIdError,
 )
 from codex_agent_sdk.generated.stable import (
@@ -1053,6 +1054,206 @@ async def test_turn_interrupt_wrapper_sends_expected_wire_shape_and_returns_type
     assert result.model_dump() == {}
 
 
+@pytest.mark.asyncio
+async def test_wait_for_turn_completed_returns_completion_and_latest_token_usage(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        sleep_action(50),
+        send_notification(
+            "thread/tokenUsage/updated",
+            params=_build_turn_token_usage_payload(thread_id="thread_wait", turn_id="turn_wait"),
+        ),
+        send_notification(
+            "turn/completed",
+            params={
+                "threadId": "thread_other",
+                "turn": _build_turn_payload(turn_id="turn_other", status="completed"),
+            },
+        ),
+        send_notification(
+            "turn/completed",
+            params={
+                "threadId": "thread_wait",
+                "turn": _build_turn_payload(turn_id="turn_wait", status="completed"),
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="wait_for_turn_completed_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.wait_for_turn_completed(
+            thread_id="thread_wait",
+            turn_id="turn_wait",
+        )
+
+        assert client._connection._notifications.subscriber_count == 0
+
+    assert isinstance(result, TurnCompletion)
+    assert result.thread_id == "thread_wait"
+    assert result.turn_id == "turn_wait"
+    assert result.status == "completed"
+    assert result.error is None
+    assert result.token_usage is not None
+    assert result.token_usage.last.input_tokens == 12
+    assert result.token_usage.total.total_tokens == 46
+
+
+@pytest.mark.asyncio
+async def test_wait_for_turn_completed_isolated_waiters_do_not_cross_consume(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        sleep_action(50),
+        send_notification(
+            "thread/tokenUsage/updated",
+            params=_build_turn_token_usage_payload(thread_id="thread_2", turn_id="turn_2"),
+        ),
+        send_notification(
+            "thread/tokenUsage/updated",
+            params=_build_turn_token_usage_payload(thread_id="thread_1", turn_id="turn_1"),
+        ),
+        send_notification(
+            "turn/completed",
+            params={
+                "threadId": "thread_2",
+                "turn": _build_turn_payload(turn_id="turn_2", status="interrupted"),
+            },
+        ),
+        send_notification(
+            "turn/completed",
+            params={
+                "threadId": "thread_1",
+                "turn": _build_turn_payload(turn_id="turn_1", status="completed"),
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="wait_for_turn_completed_isolated_waiters_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        first_waiter = asyncio.create_task(
+            client.wait_for_turn_completed(thread_id="thread_1", turn_id="turn_1")
+        )
+        second_waiter = asyncio.create_task(
+            client.wait_for_turn_completed(thread_id="thread_2", turn_id="turn_2")
+        )
+
+        first, second = await asyncio.gather(first_waiter, second_waiter)
+
+        assert client._connection._notifications.subscriber_count == 0
+
+    assert first.thread_id == "thread_1"
+    assert first.turn_id == "turn_1"
+    assert first.status == "completed"
+    assert first.token_usage is not None
+    assert first.token_usage.last.input_tokens == 12
+
+    assert second.thread_id == "thread_2"
+    assert second.turn_id == "turn_2"
+    assert second.status == "interrupted"
+    assert second.token_usage is not None
+    assert second.token_usage.last.input_tokens == 12
+
+
+@pytest.mark.asyncio
+async def test_wait_for_turn_completed_preserves_interrupted_status(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        sleep_action(50),
+        send_notification(
+            "turn/completed",
+            params={
+                "threadId": "thread_interrupt",
+                "turn": _build_turn_payload(turn_id="turn_interrupt", status="interrupted"),
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="wait_for_turn_completed_interrupted_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.wait_for_turn_completed(
+            thread_id="thread_interrupt",
+            turn_id="turn_interrupt",
+        )
+
+    assert result.status == "interrupted"
+    assert result.error is None
+    assert result.token_usage is None
+
+
+@pytest.mark.asyncio
+async def test_wait_for_turn_completed_preserves_failure_details(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        sleep_action(50),
+        send_notification(
+            "turn/completed",
+            params={
+                "threadId": "thread_failed",
+                "turn": _build_turn_payload(
+                    turn_id="turn_failed",
+                    status="failed",
+                    error={
+                        "message": "model response stream disconnected",
+                        "additionalDetails": "socket closed while streaming",
+                        "codexErrorInfo": {
+                            "responseStreamDisconnected": {
+                                "httpStatusCode": 502,
+                            }
+                        },
+                    },
+                ),
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="wait_for_turn_completed_failed_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.wait_for_turn_completed(
+            thread_id="thread_failed",
+            turn_id="turn_failed",
+        )
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.message == "model response stream disconnected"
+    assert result.error.additional_details == "socket closed while streaming"
+
+
 def test_thread_start_wrapper_rejects_unknown_keyword_argument() -> None:
     client = AppServerClient()
     thread_start = cast(Any, client.thread_start)
@@ -1819,11 +2020,42 @@ def _build_turn_payload(
     *,
     turn_id: str = "turn_123",
     status: str = "inProgress",
+    error: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "id": turn_id,
         "items": [],
         "status": status,
+    }
+    if error is not None:
+        payload["error"] = error
+    return payload
+
+
+def _build_turn_token_usage_payload(
+    *,
+    thread_id: str = "thread_123",
+    turn_id: str = "turn_123",
+) -> dict[str, object]:
+    return {
+        "threadId": thread_id,
+        "turnId": turn_id,
+        "tokenUsage": {
+            "last": {
+                "cachedInputTokens": 0,
+                "inputTokens": 12,
+                "outputTokens": 7,
+                "reasoningOutputTokens": 3,
+                "totalTokens": 22,
+            },
+            "total": {
+                "cachedInputTokens": 5,
+                "inputTokens": 20,
+                "outputTokens": 15,
+                "reasoningOutputTokens": 6,
+                "totalTokens": 46,
+            },
+        },
     }
 
 

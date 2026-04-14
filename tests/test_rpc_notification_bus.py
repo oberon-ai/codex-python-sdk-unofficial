@@ -85,6 +85,49 @@ async def test_notification_subscription_close_unregisters_itself() -> None:
 
 
 @pytest.mark.asyncio
+async def test_notification_filters_match_nested_thread_and_turn_ids() -> None:
+    bus = JsonRpcNotificationBus()
+    thread_notifications = bus.subscribe_thread("thread_1").iter_notifications()
+    turn_notifications = bus.subscribe_turn(
+        "turn_1",
+        thread_id="thread_1",
+    ).iter_notifications()
+
+    thread_started = JsonRpcNotification(
+        method="thread/started",
+        params={
+            "thread": {
+                "id": "thread_1",
+            },
+        },
+        _params_present=True,
+    )
+    turn_completed = JsonRpcNotification(
+        method="turn/completed",
+        params={
+            "threadId": "thread_1",
+            "turn": {
+                "id": "turn_1",
+                "items": [],
+                "status": "completed",
+            },
+        },
+        _params_present=True,
+    )
+
+    await bus.publish(thread_started)
+    await bus.publish(turn_completed)
+    bus.close()
+
+    assert await asyncio.wait_for(anext(thread_notifications), timeout=IO_TIMEOUT_SECONDS) == (
+        thread_started
+    )
+    assert await asyncio.wait_for(anext(turn_notifications), timeout=IO_TIMEOUT_SECONDS) == (
+        turn_completed
+    )
+
+
+@pytest.mark.asyncio
 async def test_notification_bus_closes_only_lagging_subscriber_on_overflow() -> None:
     bus = JsonRpcNotificationBus()
     lagging = bus.subscribe_thread("thread_1", max_queue_size=1).iter_notifications()

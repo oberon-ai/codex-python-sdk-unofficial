@@ -16,6 +16,7 @@ from codex_agent_sdk import (
     CodexSDKClient,
     InitializeResult,
     OverloadRetryPolicy,
+    TurnCompletion,
     TurnEvent,
     TurnHandle,
     TurnResult,
@@ -53,6 +54,7 @@ class PublicBarrelTests(unittest.TestCase):
             "query",
             "ThreadStatusChangedEvent",
             "TurnCompletedEvent",
+            "TurnCompletion",
             "TurnEvent",
             "TurnHandle",
             "TurnResult",
@@ -72,6 +74,7 @@ class PublicBarrelTests(unittest.TestCase):
         self.assertIs(DEFAULT_OVERLOAD_RETRY_POLICY, retry_module.DEFAULT_OVERLOAD_RETRY_POLICY)
         self.assertIs(InitializeResult, initialize_module.InitializeResult)
         self.assertIs(OverloadRetryPolicy, retry_module.OverloadRetryPolicy)
+        self.assertIs(TurnCompletion, results_module.TurnCompletion)
         self.assertIs(TurnHandle, results_module.TurnHandle)
         self.assertIs(TurnResult, results_module.TurnResult)
         self.assertIs(TurnStartedEvent, events_module.TurnStartedEvent)

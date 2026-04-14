@@ -50,8 +50,10 @@ from .generated.stable import (
     ThreadSourceKind,
     ThreadStartParams,
     ThreadStartResponse,
+    ThreadTokenUsageUpdatedNotification,
     ThreadUnarchiveParams,
     ThreadUnarchiveResponse,
+    TurnCompletedNotification,
     TurnInterruptParams,
     TurnInterruptResponse,
     TurnStartParams,
@@ -68,7 +70,8 @@ from .generated.stable import (
 from .options import AppServerConfig, CodexOptions
 from .protocol.initialize import InitializeResult, parse_initialize_result
 from .protocol.pydantic import dump_wire_value, validate_response_payload
-from .results import TurnHandle
+from .protocol.registries import TypedServerNotification, parse_server_notification
+from .results import TurnCompletion, TurnHandle
 from .rpc.connection import JsonRpcConnection
 from .rpc.jsonrpc import JsonRpcNotification, JsonRpcRequest
 from .rpc.router import JsonRpcNotificationSubscription, JsonRpcServerRequestHandler
@@ -583,6 +586,79 @@ class AppServerClient:
             response_model=TurnInterruptResponse,
         )
 
+    async def wait_for_turn_completed(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+    ) -> TurnCompletion:
+        """Wait for one turn's terminal completion notification and latest token usage."""
+
+        self._require_initialized(method="turn/completed")
+
+        completion_subscription = self.subscribe_turn_notifications(
+            turn_id,
+            thread_id=thread_id,
+            method="turn/completed",
+        )
+        token_usage_subscription = self.subscribe_turn_notifications(
+            turn_id,
+            thread_id=thread_id,
+            method="thread/tokenUsage/updated",
+        )
+        completion_notifications = completion_subscription.iter_notifications()
+        token_usage_notifications = token_usage_subscription.iter_notifications()
+
+        completion_task = asyncio.create_task(
+            _read_next_notification(completion_notifications),
+            name=f"codex-agent-sdk.wait-turn-completed:{turn_id}",
+        )
+        token_usage_task = asyncio.create_task(
+            _read_next_notification(token_usage_notifications),
+            name=f"codex-agent-sdk.wait-turn-token-usage:{turn_id}",
+        )
+
+        latest_token_usage = None
+
+        try:
+            while True:
+                done, _pending = await asyncio.wait(
+                    {completion_task, token_usage_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if token_usage_task in done:
+                    token_usage_notification = token_usage_task.result()
+                    latest_token_usage = _parse_turn_token_usage_notification(
+                        token_usage_notification
+                    ).token_usage
+                    token_usage_task = asyncio.create_task(
+                        _read_next_notification(token_usage_notifications),
+                        name=f"codex-agent-sdk.wait-turn-token-usage:{turn_id}",
+                    )
+
+                if completion_task in done:
+                    completion_notification = completion_task.result()
+                    return TurnCompletion(
+                        completion=_parse_turn_completed_notification(completion_notification),
+                        token_usage=latest_token_usage,
+                    )
+        except StopAsyncIteration:
+            raise TransportClosedError(
+                f"app-server connection closed before turn/completed for turn_id={turn_id!r}",
+                stderr_tail=self._connection.transport.stderr_tail,
+            ) from None
+        finally:
+            completion_task.cancel()
+            token_usage_task.cancel()
+            await asyncio.gather(
+                completion_task,
+                token_usage_task,
+                return_exceptions=True,
+            )
+            completion_subscription.close()
+            token_usage_subscription.close()
+
     async def _run_initialize_handshake(self) -> InitializeResult:
         deadline = asyncio.get_running_loop().time() + self.config.startup_timeout
         try:
@@ -818,6 +894,34 @@ def _build_initialize_params(config: AppServerConfig) -> dict[str, object]:
             capabilities=capabilities,
         )
     return params.model_dump()
+
+
+async def _read_next_notification(
+    notifications: AsyncIterator[JsonRpcNotification],
+) -> JsonRpcNotification:
+    return await anext(notifications)
+
+
+def _parse_turn_completed_notification(
+    notification: JsonRpcNotification,
+) -> TurnCompletedNotification:
+    parsed = parse_server_notification(notification)
+    if not isinstance(parsed, TypedServerNotification) or not isinstance(
+        parsed.params, TurnCompletedNotification
+    ):
+        raise TypeError("Expected a typed turn/completed notification.")
+    return parsed.params
+
+
+def _parse_turn_token_usage_notification(
+    notification: JsonRpcNotification,
+) -> ThreadTokenUsageUpdatedNotification:
+    parsed = parse_server_notification(notification)
+    if not isinstance(parsed, TypedServerNotification) or not isinstance(
+        parsed.params, ThreadTokenUsageUpdatedNotification
+    ):
+        raise TypeError("Expected a typed thread/tokenUsage/updated notification.")
+    return parsed.params
 
 
 def _remaining_startup_timeout(

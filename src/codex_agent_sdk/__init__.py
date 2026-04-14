@@ -89,7 +89,7 @@ from .options import (
 )
 from .protocol.initialize import InitializeResult
 from .query import query
-from .results import TurnHandle, TurnResult
+from .results import TurnCompletion, TurnHandle, TurnResult
 from .retry import (
     DEFAULT_OVERLOAD_RETRY_POLICY,
     OverloadRetryPolicy,
@@ -161,6 +161,7 @@ __all__ = [
     "TransportError",
     "TransportWriteError",
     "TurnCompletedEvent",
+    "TurnCompletion",
     "TurnEvent",
     "TurnHandle",
     "TurnResult",

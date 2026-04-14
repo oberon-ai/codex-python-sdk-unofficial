@@ -33,6 +33,7 @@ These names should be importable from `codex_agent_sdk`:
 | `AppServerClient` | class | Low-level typed JSON-RPC client for `codex app-server --listen stdio://`. |
 | `CodexSDKClient` | class | High-level stateful client for thread workflows and streamed turn events. |
 | `TurnHandle` | class | Handle for one in-flight or completed turn, including event iteration and lifecycle helpers. |
+| `TurnCompletion` | dataclass | Low-level terminal turn payload paired with the latest observed token usage. |
 | `TurnResult` | dataclass | Final summarized result for a turn. |
 | `OverloadRetryPolicy` | dataclass | Opt-in backoff policy for replaying overload-safe operations. |
 | `TurnEvent` | type alias | Union of typed high-level events plus raw passthrough wrappers. |
@@ -363,6 +364,28 @@ Contract notes:
 - `structured_output` is populated only when `output_schema` was supplied and Codex returned a schema-conforming final assistant payload.
 - `items` is the final authoritative item list for the turn, even though streaming item lifecycle is observed incrementally.
 
+## `TurnCompletion`
+
+`TurnCompletion` is the lower-level terminal payload returned by
+`AppServerClient.wait_for_turn_completed(...)`.
+
+It should contain:
+
+- `completion`
+  The full typed `TurnCompletedNotification` payload from the server.
+- `token_usage`
+  The latest typed `ThreadTokenUsage` snapshot observed for that `thread_id` and
+  `turn_id` while waiting.
+
+Contract notes:
+
+- `TurnCompletion` preserves the authoritative terminal `turn` object rather
+  than compressing it into a summarized `TurnResult`.
+- `token_usage` may be `None` if the server never emitted a
+  `thread/tokenUsage/updated` notification for the turn before completion.
+- `status`, `thread_id`, `turn_id`, `turn`, `items`, and `error` are exposed as
+  convenience properties over the preserved completion payload.
+
 ## `AppServerClient`: Low-Level Escape Hatch
 
 ### Signature sketch
@@ -491,6 +514,12 @@ class AppServerClient:
         thread_id: str,
         turn_id: str,
     ) -> TurnInterruptResult: ...
+    async def wait_for_turn_completed(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+    ) -> TurnCompletion: ...
 ```
 
 ### Contract
@@ -537,6 +566,7 @@ Design notes:
 - `turn_steer(..., expected_turn_id=..., input=...)` is the low-level same-turn control path for an already active in-flight turn. It reuses the same input-item coercion rules as `turn_start(...)`, but it does not create a new turn and it does not accept turn-level override knobs such as `model`, `cwd`, `approval_policy`, `summary`, or `output_schema`.
 - `turn_steer(...)` preserves server-side steerability failures as normal JSON-RPC errors, including method, request id, and structured error `data` when the current active turn cannot accept steering.
 - `turn_interrupt(..., thread_id=..., turn_id=...)` is the explicit cancellation request for one existing in-flight turn. The response only acknowledges that the interrupt request was accepted; callers should still watch notifications or higher-level turn events for terminal `interrupted` completion.
+- `wait_for_turn_completed(..., thread_id=..., turn_id=...)` is the low-level terminal waiter for one turn. It listens on turn-scoped notification subscriptions, ignores other turns, preserves the full typed `turn/completed` payload, and carries the latest observed per-turn token-usage snapshot so callers do not need to re-read history just to collect terminal state.
 - Notification subscriptions are independent. One slow or abandoned subscriber must not block other subscribers or the dispatcher task.
 - Notification subscription queues are bounded by default. If a subscriber falls behind and its queue fills, that subscription closes with `NotificationSubscriptionOverflowError` after any already-queued notifications are drained.
 - Unhandled server-request methods are surfaced to higher layers by default rather than rejected implicitly.

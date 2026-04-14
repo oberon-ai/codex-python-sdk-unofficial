@@ -10,6 +10,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeAlias
 
+from .generated.stable import ThreadTokenUsage, Turn, TurnCompletedNotification, TurnError
+
 if TYPE_CHECKING:
     from .events import TurnEvent
 
@@ -31,6 +33,38 @@ class TurnResult:
     error: BaseException | None = None
     assistant_text: str | None = None
     structured_output: object | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TurnCompletion:
+    """Low-level terminal turn payload plus the latest observed token usage."""
+
+    completion: TurnCompletedNotification
+    token_usage: ThreadTokenUsage | None = None
+
+    @property
+    def error(self) -> TurnError | None:
+        return self.completion.turn.error
+
+    @property
+    def items(self) -> tuple[object, ...]:
+        return tuple(self.completion.turn.items)
+
+    @property
+    def status(self) -> str:
+        return self.completion.turn.status.value
+
+    @property
+    def thread_id(self) -> str:
+        return self.completion.thread_id
+
+    @property
+    def turn(self) -> Turn:
+        return self.completion.turn
+
+    @property
+    def turn_id(self) -> str:
+        return self.completion.turn.id
 
 
 class TurnHandle(AsyncIterator["TurnEvent"]):
@@ -90,6 +124,7 @@ class TurnHandle(AsyncIterator["TurnEvent"]):
 
 
 __all__ = [
+    "TurnCompletion",
     "TurnHandle",
     "TurnResult",
 ]
