@@ -85,6 +85,7 @@ It should cover:
 
 - `codex_bin`
 - `extra_args`
+- `cwd`
 - `env`
 - `startup_timeout`
 - `shutdown_timeout`
@@ -96,6 +97,7 @@ It should cover:
 Contract notes:
 
 - `experimental_api` defaults to `False`.
+- `AppServerConfig.cwd` controls the app-server process working directory and is distinct from `CodexOptions.cwd`, which is a per-thread or per-turn workspace override.
 - The low-level client performs the required handshake automatically: send `initialize`, then send `initialized`, then allow other methods.
 - Stderr from the subprocess is captured and surfaced on startup or shutdown failures instead of being swallowed.
 

@@ -31,24 +31,40 @@ class StartupError(TransportError):
         *,
         stderr_tail: str | None = None,
         exit_code: int | None = None,
+        command: Sequence[str] | None = None,
+        cwd: str | None = None,
     ) -> None:
         self.stderr_tail = stderr_tail
         self.exit_code = exit_code
+        self.command = tuple(command) if command is not None else None
+        self.cwd = cwd
         TransportError.__init__(
             self,
-            _compose_message(message, stderr_tail=stderr_tail, exit_code=exit_code),
+            _compose_message(
+                message,
+                stderr_tail=stderr_tail,
+                exit_code=exit_code,
+                command=self.command,
+                cwd=cwd,
+            ),
         )
 
 
 class CodexNotFoundError(StartupError, FileNotFoundError):
     """Raised when the configured Codex binary cannot be found."""
 
-    def __init__(self, path: str | None = None) -> None:
+    def __init__(
+        self,
+        path: str | None = None,
+        *,
+        command: Sequence[str] | None = None,
+        cwd: str | None = None,
+    ) -> None:
         self.path = path
         message = "Codex binary not found"
         if path:
             message = f"{message}: {path}"
-        super().__init__(message)
+        super().__init__(message, command=command, cwd=cwd)
 
 
 class ShutdownError(TransportError):
@@ -207,12 +223,21 @@ class CodexTimeoutError(CodexError):
 class StartupTimeoutError(StartupError, CodexTimeoutError):
     """Raised when process startup or initialization exceeds the local deadline."""
 
-    def __init__(self, *, timeout_seconds: float, stderr_tail: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float,
+        stderr_tail: str | None = None,
+        command: Sequence[str] | None = None,
+        cwd: str | None = None,
+    ) -> None:
         self.timeout_seconds = timeout_seconds
         StartupError.__init__(
             self,
             _format_timeout_message("app-server startup timed out", timeout_seconds),
             stderr_tail=stderr_tail,
+            command=command,
+            cwd=cwd,
         )
 
 
@@ -324,8 +349,14 @@ def _compose_message(
     *,
     stderr_tail: str | None = None,
     exit_code: int | None = None,
+    command: Sequence[str] | None = None,
+    cwd: str | None = None,
 ) -> str:
     details = [message]
+    if command is not None:
+        details.append(f"command={list(command)!r}")
+    if cwd is not None:
+        details.append(f"cwd={cwd}")
     if exit_code is not None:
         details.append(f"exit_code={exit_code}")
     if stderr_tail:

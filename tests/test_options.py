@@ -24,6 +24,9 @@ class TimeoutPolicyTests(unittest.TestCase):
     def test_app_server_config_uses_timeout_policy_defaults(self) -> None:
         config = AppServerConfig()
 
+        self.assertIsNone(config.cwd)
+        self.assertEqual(config.extra_args, ())
+        self.assertIsNone(config.env)
         self.assertEqual(config.startup_timeout, DEFAULT_TIMEOUT_POLICY.startup)
         self.assertEqual(config.shutdown_timeout, DEFAULT_TIMEOUT_POLICY.shutdown)
         self.assertFalse(config.experimental_api)

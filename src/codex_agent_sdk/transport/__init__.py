@@ -1,3 +1,8 @@
 """Async subprocess transport layer for ``codex app-server``."""
 
-__all__: list[str] = []
+from .stdio import StdioTransport, StdioTransportInfo
+
+__all__ = [
+    "StdioTransport",
+    "StdioTransportInfo",
+]

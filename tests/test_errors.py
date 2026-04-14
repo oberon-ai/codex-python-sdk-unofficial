@@ -93,10 +93,16 @@ class ExceptionStructureTests(unittest.TestCase):
         self.assertEqual(error.timeout_seconds, 5.0)
 
     def test_not_found_is_also_startup_error(self) -> None:
-        error = CodexNotFoundError("/missing/codex")
+        error = CodexNotFoundError(
+            "/missing/codex",
+            command=("/missing/codex", "app-server", "--listen", "stdio://"),
+            cwd="/tmp/project",
+        )
 
         self.assertIsInstance(error, StartupError)
         self.assertIn("/missing/codex", str(error))
+        self.assertIn("command=", str(error))
+        self.assertIn("cwd=/tmp/project", str(error))
 
     def test_request_timeout_preserves_method_and_request_id(self) -> None:
         error = RequestTimeoutError(method="turn/start", timeout_seconds=12.5, request_id="req-7")

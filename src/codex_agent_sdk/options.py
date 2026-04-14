@@ -31,6 +31,7 @@ class AppServerConfig:
 
     codex_bin: str | None = None
     extra_args: tuple[str, ...] = ()
+    cwd: str | None = None
     env: Mapping[str, str] | None = None
     startup_timeout: float = DEFAULT_TIMEOUT_POLICY.startup
     shutdown_timeout: float = DEFAULT_TIMEOUT_POLICY.shutdown
