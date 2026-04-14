@@ -23,9 +23,14 @@ from .errors import (
 )
 from .events import TurnEvent
 from .generated.stable import (
+    ApprovalsReviewer,
+    AskForApproval,
     ClientInfo,
     InitializeCapabilities,
     InitializeParams,
+    Personality,
+    SandboxMode,
+    ServiceTier,
     ThreadForkParams,
     ThreadForkResponse,
     ThreadResumeParams,
@@ -278,21 +283,79 @@ class AppServerClient:
 
         self._connection.remove_server_request_handler(method)
 
-    async def thread_start(self, **params: Any) -> ThreadStartResponse:
+    async def thread_start(
+        self,
+        *,
+        approval_policy: AskForApproval | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        base_instructions: str | None = None,
+        config: dict[str, Any] | None = None,
+        cwd: str | None = None,
+        developer_instructions: str | None = None,
+        ephemeral: bool | None = None,
+        model: str | None = None,
+        model_provider: str | None = None,
+        personality: Personality | None = None,
+        sandbox: SandboxMode | None = None,
+        service_name: str | None = None,
+        service_tier: ServiceTier | None = None,
+    ) -> ThreadStartResponse:
         """Start a new app-server thread."""
 
         return await self.request(
             "thread/start",
-            ThreadStartParams(**params),
+            ThreadStartParams(
+                approval_policy=approval_policy,
+                approvals_reviewer=approvals_reviewer,
+                base_instructions=base_instructions,
+                config=config,
+                cwd=cwd,
+                developer_instructions=developer_instructions,
+                ephemeral=ephemeral,
+                model=model,
+                model_provider=model_provider,
+                personality=personality,
+                sandbox=sandbox,
+                service_name=service_name,
+                service_tier=service_tier,
+            ),
             response_model=ThreadStartResponse,
         )
 
-    async def thread_resume(self, **params: Any) -> ThreadResumeResponse:
+    async def thread_resume(
+        self,
+        *,
+        thread_id: str,
+        approval_policy: AskForApproval | None = None,
+        approvals_reviewer: ApprovalsReviewer | None = None,
+        base_instructions: str | None = None,
+        config: dict[str, Any] | None = None,
+        cwd: str | None = None,
+        developer_instructions: str | None = None,
+        model: str | None = None,
+        model_provider: str | None = None,
+        personality: Personality | None = None,
+        sandbox: SandboxMode | None = None,
+        service_tier: ServiceTier | None = None,
+    ) -> ThreadResumeResponse:
         """Resume an existing app-server thread."""
 
         return await self.request(
             "thread/resume",
-            ThreadResumeParams(**params),
+            ThreadResumeParams(
+                thread_id=thread_id,
+                approval_policy=approval_policy,
+                approvals_reviewer=approvals_reviewer,
+                base_instructions=base_instructions,
+                config=config,
+                cwd=cwd,
+                developer_instructions=developer_instructions,
+                model=model,
+                model_provider=model_provider,
+                personality=personality,
+                sandbox=sandbox,
+                service_tier=service_tier,
+            ),
             response_model=ThreadResumeResponse,
         )
 

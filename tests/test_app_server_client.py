@@ -6,6 +6,7 @@ import sys
 import textwrap
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -24,7 +25,13 @@ from codex_agent_sdk import (
     TransportClosedError,
     UnknownResponseIdError,
 )
-from codex_agent_sdk.generated.stable import ThreadStartParams, ThreadStartResponse
+from codex_agent_sdk.generated.stable import (
+    ApprovalsReviewer,
+    AskForApproval,
+    ThreadResumeResponse,
+    ThreadStartParams,
+    ThreadStartResponse,
+)
 from codex_agent_sdk.rpc import JsonRpcNotification, JsonRpcRequest
 from codex_agent_sdk.testing import (
     FakeAppServerScript,
@@ -392,7 +399,9 @@ async def test_typed_request_preserves_jsonrpc_error_mapping_and_request_id(
 
 
 @pytest.mark.asyncio
-async def test_specific_rpc_wrapper_returns_generated_typed_response(tmp_path: Path) -> None:
+async def test_thread_start_wrapper_sends_expected_wire_shape_and_returns_typed_response(
+    tmp_path: Path,
+) -> None:
     script = FakeAppServerScript.from_actions(
         expect_request("initialize", save_as="initialize"),
         send_response(request_ref="initialize", result={"protocolVersion": 2}),
@@ -400,7 +409,16 @@ async def test_specific_rpc_wrapper_returns_generated_typed_response(tmp_path: P
         expect_request(
             "thread/start",
             save_as="thread_start",
-            params={"ephemeral": True},
+            params={
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "user",
+                "cwd": "/repo",
+                "developerInstructions": "Use pytest",
+                "ephemeral": True,
+                "model": "gpt-5.4",
+                "modelProvider": "openai",
+                "serviceName": "codex-cli",
+            },
         ),
         send_response(
             request_ref="thread_start",
@@ -415,10 +433,83 @@ async def test_specific_rpc_wrapper_returns_generated_typed_response(tmp_path: P
 
     async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
         await client.initialize()
-        result = await client.thread_start(ephemeral=True)
+        result = await client.thread_start(
+            approval_policy=AskForApproval.model_validate("on-request"),
+            approvals_reviewer=ApprovalsReviewer.user,
+            cwd="/repo",
+            developer_instructions="Use pytest",
+            ephemeral=True,
+            model="gpt-5.4",
+            model_provider="openai",
+            service_name="codex-cli",
+        )
 
     assert isinstance(result, ThreadStartResponse)
     assert result.thread.id == "thread_123"
+
+
+@pytest.mark.asyncio
+async def test_thread_resume_wrapper_sends_expected_wire_shape_and_returns_typed_response(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request(
+            "thread/resume",
+            save_as="thread_resume",
+            params={
+                "approvalPolicy": "on-request",
+                "approvalsReviewer": "guardian_subagent",
+                "cwd": "/repo/resumed",
+                "developerInstructions": "Resume carefully",
+                "model": "gpt-5.5",
+                "modelProvider": "openai",
+                "threadId": "thread_resumed",
+            },
+        ),
+        send_response(
+            request_ref="thread_resume",
+            result=_build_thread_start_result(thread_id="thread_resumed"),
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="typed_resume_wrapper_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        result = await client.thread_resume(
+            thread_id="thread_resumed",
+            approval_policy=AskForApproval.model_validate("on-request"),
+            approvals_reviewer=ApprovalsReviewer.guardian_subagent,
+            cwd="/repo/resumed",
+            developer_instructions="Resume carefully",
+            model="gpt-5.5",
+            model_provider="openai",
+        )
+
+    assert isinstance(result, ThreadResumeResponse)
+    assert result.thread.id == "thread_resumed"
+
+
+def test_thread_start_wrapper_rejects_unknown_keyword_argument() -> None:
+    client = AppServerClient()
+    thread_start = cast(Any, client.thread_start)
+
+    with pytest.raises(TypeError, match="unsupported"):
+        thread_start(ephemeral=True, unsupported=True)
+
+
+def test_thread_resume_wrapper_requires_thread_id_keyword() -> None:
+    client = AppServerClient()
+    thread_resume = cast(Any, client.thread_resume)
+
+    with pytest.raises(TypeError, match="thread_id"):
+        thread_resume()
 
 
 @pytest.mark.asyncio
@@ -986,13 +1077,13 @@ async def test_notification_iterator_wakes_on_close_and_failure(tmp_path: Path) 
             await asyncio.wait_for(anext(notifications), timeout=IO_TIMEOUT_SECONDS)
 
 
-def _build_thread_payload() -> dict[str, object]:
+def _build_thread_payload(*, thread_id: str = "thread_123") -> dict[str, object]:
     return {
         "cliVersion": "codex-cli 0.118.0",
         "createdAt": 1_710_000_000,
         "cwd": "/repo",
         "ephemeral": True,
-        "id": "thread_123",
+        "id": thread_id,
         "modelProvider": "openai",
         "preview": "Find the smallest failing test.",
         "source": "appServer",
@@ -1002,7 +1093,7 @@ def _build_thread_payload() -> dict[str, object]:
     }
 
 
-def _build_thread_start_result() -> dict[str, object]:
+def _build_thread_start_result(*, thread_id: str = "thread_123") -> dict[str, object]:
     return {
         "approvalPolicy": "on-request",
         "approvalsReviewer": "user",
@@ -1010,7 +1101,7 @@ def _build_thread_start_result() -> dict[str, object]:
         "model": "gpt-5.4",
         "modelProvider": "openai",
         "sandbox": {"type": "dangerFullAccess"},
-        "thread": _build_thread_payload(),
+        "thread": _build_thread_payload(thread_id=thread_id),
     }
 
 
