@@ -11,20 +11,30 @@ from typing import Any, cast
 import pytest
 
 from codex_agent_sdk import (
+    AgentTextDeltaEvent,
     AlreadyInitializedError,
     AppServerClient,
     AppServerConfig,
     ClientStateError,
+    CommandOutputDeltaEvent,
     DuplicateResponseError,
     InitializeResult,
+    ItemCompletedEvent,
+    ItemStartedEvent,
     JsonRpcInvalidParamsError,
     JsonRpcServerError,
     NotInitializedError,
+    RawNotificationEvent,
+    ReasoningTextDeltaEvent,
     RequestTimeoutError,
     ResponseValidationError,
     StartupTimeoutError,
+    ThreadStatusChangedEvent,
+    TokenUsageUpdatedEvent,
     TransportClosedError,
+    TurnCompletedEvent,
     TurnCompletion,
+    TurnStartedEvent,
     UnknownResponseIdError,
 )
 from codex_agent_sdk.generated.stable import (
@@ -1254,6 +1264,300 @@ async def test_wait_for_turn_completed_preserves_failure_details(
     assert result.error.additional_details == "socket closed while streaming"
 
 
+@pytest.mark.asyncio
+async def test_iter_turn_events_yields_typed_events_only_for_target_turn(
+    tmp_path: Path,
+) -> None:
+    item_payload = _build_agent_message_item_payload(item_id="item_target")
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        sleep_action(50),
+        send_notification(
+            "turn/started",
+            params={
+                "threadId": "thread_turn_stream",
+                "turn": _build_turn_payload(turn_id="turn_target", status="inProgress"),
+            },
+        ),
+        send_notification(
+            "turn/started",
+            params={
+                "threadId": "thread_turn_stream",
+                "turn": _build_turn_payload(turn_id="turn_other", status="inProgress"),
+            },
+        ),
+        send_notification(
+            "item/started",
+            params={
+                "threadId": "thread_turn_stream",
+                "turnId": "turn_target",
+                "item": item_payload,
+            },
+        ),
+        send_notification(
+            "item/agentMessage/delta",
+            params={
+                "delta": "Working on it.",
+                "itemId": "item_target",
+                "threadId": "thread_turn_stream",
+                "turnId": "turn_target",
+            },
+        ),
+        send_notification(
+            "item/agentMessage/delta",
+            params={
+                "delta": "ignore me",
+                "itemId": "item_other",
+                "threadId": "thread_turn_stream",
+                "turnId": "turn_other",
+            },
+        ),
+        send_notification(
+            "item/reasoning/textDelta",
+            params={
+                "contentIndex": 0,
+                "delta": "Need to inspect pytest output.",
+                "itemId": "item_reasoning",
+                "threadId": "thread_turn_stream",
+                "turnId": "turn_target",
+            },
+        ),
+        send_notification(
+            "item/commandExecution/outputDelta",
+            params={
+                "delta": "FAILED tests/test_example.py::test_case\\n",
+                "itemId": "item_command",
+                "threadId": "thread_turn_stream",
+                "turnId": "turn_target",
+            },
+        ),
+        send_notification(
+            "thread/tokenUsage/updated",
+            params=_build_turn_token_usage_payload(
+                thread_id="thread_turn_stream",
+                turn_id="turn_target",
+            ),
+        ),
+        send_notification(
+            "thread/tokenUsage/updated",
+            params=_build_turn_token_usage_payload(
+                thread_id="thread_turn_stream",
+                turn_id="turn_other",
+            ),
+        ),
+        send_notification(
+            "thread/status/changed",
+            params={
+                "threadId": "thread_turn_stream",
+                "status": {
+                    "type": "active",
+                    "activeFlags": [],
+                },
+            },
+        ),
+        send_notification(
+            "turn/plan/updated",
+            params={
+                "threadId": "thread_turn_stream",
+                "turnId": "turn_target",
+                "plan": [{"step": "Reproduce failure", "status": "completed"}],
+            },
+        ),
+        send_notification(
+            "item/completed",
+            params={
+                "threadId": "thread_turn_stream",
+                "turnId": "turn_target",
+                "item": item_payload,
+            },
+        ),
+        send_notification(
+            "turn/completed",
+            params={
+                "threadId": "thread_turn_stream",
+                "turn": _build_turn_payload(
+                    turn_id="turn_target",
+                    status="completed",
+                    items=[item_payload],
+                ),
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="iter_turn_events_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        events = await asyncio.wait_for(
+            _collect_async_events(
+                client.iter_turn_events(
+                    thread_id="thread_turn_stream",
+                    turn_id="turn_target",
+                )
+            ),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+        assert client._connection._notifications.subscriber_count == 0
+
+    assert [type(event) for event in events] == [
+        TurnStartedEvent,
+        ItemStartedEvent,
+        AgentTextDeltaEvent,
+        ReasoningTextDeltaEvent,
+        CommandOutputDeltaEvent,
+        TokenUsageUpdatedEvent,
+        ThreadStatusChangedEvent,
+        RawNotificationEvent,
+        ItemCompletedEvent,
+        TurnCompletedEvent,
+    ]
+
+    turn_started = events[0]
+    assert isinstance(turn_started, TurnStartedEvent)
+    assert turn_started.thread_id == "thread_turn_stream"
+    assert turn_started.turn_id == "turn_target"
+    assert turn_started.turn_status == "in_progress"
+
+    item_started = events[1]
+    assert isinstance(item_started, ItemStartedEvent)
+    assert cast(Any, item_started.item).model_dump() == item_payload
+
+    text_delta = events[2]
+    assert isinstance(text_delta, AgentTextDeltaEvent)
+    assert text_delta.text_delta == "Working on it."
+
+    reasoning_delta = events[3]
+    assert isinstance(reasoning_delta, ReasoningTextDeltaEvent)
+    assert reasoning_delta.text_delta == "Need to inspect pytest output."
+
+    command_delta = events[4]
+    assert isinstance(command_delta, CommandOutputDeltaEvent)
+    assert command_delta.output_delta == "FAILED tests/test_example.py::test_case\\n"
+
+    token_usage_event = events[5]
+    assert isinstance(token_usage_event, TokenUsageUpdatedEvent)
+    assert cast(Any, token_usage_event.token_usage).last.input_tokens == 12
+
+    thread_status_event = events[6]
+    assert isinstance(thread_status_event, ThreadStatusChangedEvent)
+    assert thread_status_event.thread_status == "active"
+
+    raw_event = events[7]
+    assert isinstance(raw_event, RawNotificationEvent)
+    assert raw_event.method == "turn/plan/updated"
+
+    item_completed = events[8]
+    assert isinstance(item_completed, ItemCompletedEvent)
+    assert cast(Any, item_completed.item).model_dump() == item_payload
+
+    completion_event = events[9]
+    assert isinstance(completion_event, TurnCompletedEvent)
+    assert completion_event.turn_status == "completed"
+    assert completion_event.error is None
+    assert completion_event.result is not None
+    assert completion_event.result.status == "completed"
+    assert completion_event.result.assistant_text == "Working on it."
+    assert completion_event.result.token_usage is not None
+    assert cast(Any, completion_event.result.token_usage).total.total_tokens == 46
+    assert len(completion_event.result.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_iter_turn_events_ends_on_interrupted_completion(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        sleep_action(50),
+        send_notification(
+            "turn/started",
+            params={
+                "threadId": "thread_interrupt_stream",
+                "turn": _build_turn_payload(turn_id="turn_interrupt", status="inProgress"),
+            },
+        ),
+        send_notification(
+            "turn/completed",
+            params={
+                "threadId": "thread_interrupt_stream",
+                "turn": _build_turn_payload(turn_id="turn_interrupt", status="interrupted"),
+            },
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="iter_turn_events_interrupted_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        events = await asyncio.wait_for(
+            _collect_async_events(
+                client.iter_turn_events(
+                    thread_id="thread_interrupt_stream",
+                    turn_id="turn_interrupt",
+                )
+            ),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+    assert len(events) == 2
+    assert isinstance(events[0], TurnStartedEvent)
+    assert isinstance(events[1], TurnCompletedEvent)
+    completion_event = events[1]
+    assert isinstance(completion_event, TurnCompletedEvent)
+    assert completion_event.turn_status == "interrupted"
+    assert completion_event.result is not None
+    assert completion_event.result.status == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_iter_turn_events_raises_if_connection_closes_before_completion(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        sleep_action(50),
+        send_notification(
+            "turn/started",
+            params={
+                "threadId": "thread_stream_eof",
+                "turn": _build_turn_payload(turn_id="turn_stream_eof", status="inProgress"),
+            },
+        ),
+        close_connection(),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="iter_turn_events_eof_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        events = client.iter_turn_events(
+            thread_id="thread_stream_eof",
+            turn_id="turn_stream_eof",
+        )
+
+        first_event = await asyncio.wait_for(anext(events), timeout=IO_TIMEOUT_SECONDS)
+        assert isinstance(first_event, TurnStartedEvent)
+
+        with pytest.raises(TransportClosedError):
+            await asyncio.wait_for(anext(events), timeout=IO_TIMEOUT_SECONDS)
+
+
 def test_thread_start_wrapper_rejects_unknown_keyword_argument() -> None:
     client = AppServerClient()
     thread_start = cast(Any, client.thread_start)
@@ -2021,15 +2325,24 @@ def _build_turn_payload(
     turn_id: str = "turn_123",
     status: str = "inProgress",
     error: dict[str, object] | None = None,
+    items: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "id": turn_id,
-        "items": [],
+        "items": [] if items is None else items,
         "status": status,
     }
     if error is not None:
         payload["error"] = error
     return payload
+
+
+def _build_agent_message_item_payload(*, item_id: str = "item_123") -> dict[str, object]:
+    return {
+        "id": item_id,
+        "text": "Working on it.",
+        "type": "agentMessage",
+    }
 
 
 def _build_turn_token_usage_payload(
@@ -2061,6 +2374,13 @@ def _build_turn_token_usage_payload(
 
 def _build_turn_start_result(*, turn_id: str = "turn_123") -> dict[str, object]:
     return {"turn": _build_turn_payload(turn_id=turn_id)}
+
+
+async def _collect_async_events(events: AsyncIterator[object]) -> list[object]:
+    collected: list[object] = []
+    async for event in events:
+        collected.append(event)
+    return collected
 
 
 def _write_fake_codex_launcher(

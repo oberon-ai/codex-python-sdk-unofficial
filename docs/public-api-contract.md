@@ -520,6 +520,12 @@ class AppServerClient:
         thread_id: str,
         turn_id: str,
     ) -> TurnCompletion: ...
+    def iter_turn_events(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+    ) -> AsyncIterator[TurnEvent]: ...
 ```
 
 ### Contract
@@ -567,6 +573,8 @@ Design notes:
 - `turn_steer(...)` preserves server-side steerability failures as normal JSON-RPC errors, including method, request id, and structured error `data` when the current active turn cannot accept steering.
 - `turn_interrupt(..., thread_id=..., turn_id=...)` is the explicit cancellation request for one existing in-flight turn. The response only acknowledges that the interrupt request was accepted; callers should still watch notifications or higher-level turn events for terminal `interrupted` completion.
 - `wait_for_turn_completed(..., thread_id=..., turn_id=...)` is the low-level terminal waiter for one turn. It listens on turn-scoped notification subscriptions, ignores other turns, preserves the full typed `turn/completed` payload, and carries the latest observed per-turn token-usage snapshot so callers do not need to re-read history just to collect terminal state.
+- `iter_turn_events(..., thread_id=..., turn_id=...)` is the first low-level typed turn stream. It yields typed `TurnEvent` values for the target turn plus useful thread-scoped status changes for the same thread, ends cleanly after `turn/completed`, and propagates fatal connection failures instead of silently truncating the stream.
+- `iter_turn_events(...)` is intentionally subscription-based. It starts at the current notification point and may miss events that were already emitted before the caller attached. The later high-level `CodexSDKClient.query()` flow is responsible for provisional pre-start routing that avoids that race.
 - Notification subscriptions are independent. One slow or abandoned subscriber must not block other subscribers or the dispatcher task.
 - Notification subscription queues are bounded by default. If a subscriber falls behind and its queue fills, that subscription closes with `NotificationSubscriptionOverflowError` after any already-queued notifications are drained.
 - Unhandled server-request methods are surfaced to higher layers by default rather than rejected implicitly.

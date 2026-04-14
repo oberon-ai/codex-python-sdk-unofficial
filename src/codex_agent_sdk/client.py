@@ -21,7 +21,7 @@ from .errors import (
     StartupTimeoutError,
     TransportClosedError,
 )
-from .events import TurnEvent
+from .events import TurnCompletedEvent, TurnEvent
 from .generated.stable import (
     ApprovalsReviewer,
     AskForApproval,
@@ -68,6 +68,7 @@ from .generated.stable import (
     UserInput5,
 )
 from .options import AppServerConfig, CodexOptions
+from .protocol.adapters import TurnEventAdapterState, adapt_turn_notification
 from .protocol.initialize import InitializeResult, parse_initialize_result
 from .protocol.pydantic import dump_wire_value, validate_response_payload
 from .protocol.registries import TypedServerNotification, parse_server_notification
@@ -659,6 +660,17 @@ class AppServerClient:
             completion_subscription.close()
             token_usage_subscription.close()
 
+    def iter_turn_events(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+    ) -> AsyncIterator[TurnEvent]:
+        """Iterate typed turn events for one target turn from the current subscription point."""
+
+        self._require_initialized(method="turn event stream")
+        return _iter_turn_events(self, thread_id=thread_id, turn_id=turn_id)
+
     async def _run_initialize_handshake(self) -> InitializeResult:
         deadline = asyncio.get_running_loop().time() + self.config.startup_timeout
         try:
@@ -900,6 +912,46 @@ async def _read_next_notification(
     notifications: AsyncIterator[JsonRpcNotification],
 ) -> JsonRpcNotification:
     return await anext(notifications)
+
+
+async def _iter_turn_events(
+    client: AppServerClient,
+    *,
+    thread_id: str,
+    turn_id: str,
+) -> AsyncIterator[TurnEvent]:
+    subscription = client.subscribe_thread_notifications(thread_id)
+    notifications = subscription.iter_notifications()
+    adapter_state = TurnEventAdapterState()
+    stream_completed = False
+
+    try:
+        while True:
+            try:
+                notification = await _read_next_notification(notifications)
+            except StopAsyncIteration:
+                if stream_completed:
+                    return
+                raise TransportClosedError(
+                    "app-server connection closed before turn stream completed "
+                    f"for turn_id={turn_id!r}",
+                    stderr_tail=client._connection.transport.stderr_tail,
+                ) from None
+
+            event = adapt_turn_notification(
+                notification,
+                target_turn_id=turn_id,
+                state=adapter_state,
+            )
+            if event is None:
+                continue
+
+            yield event
+            if isinstance(event, TurnCompletedEvent):
+                stream_completed = True
+                return
+    finally:
+        subscription.close()
 
 
 def _parse_turn_completed_notification(
