@@ -23,7 +23,12 @@ from ..errors import (
     TransportWriteError,
 )
 from ..options import AppServerConfig
-from ..rpc.jsonrpc import JsonRpcEnvelope, parse_jsonrpc_envelope, serialize_jsonrpc_envelope
+from ..rpc.jsonrpc import (
+    JsonRpcEnvelope,
+    JsonRpcEnvelopeLike,
+    parse_jsonrpc_envelope,
+    serialize_jsonrpc_envelope,
+)
 
 APP_SERVER_SUBCOMMAND = "app-server"
 DEFAULT_CODEX_BIN = "codex"
@@ -344,7 +349,7 @@ class StdioTransport:
         self._debug.log_frame(direction="inbound", envelope=envelope)
         return envelope
 
-    async def write_stdin_envelope(self, envelope: JsonRpcEnvelope) -> None:
+    async def write_stdin_envelope(self, envelope: JsonRpcEnvelopeLike) -> None:
         """Serialize and flush one JSON-RPC envelope to stdin as exactly one frame."""
 
         frame = _encode_stdin_frame(envelope)
@@ -670,7 +675,7 @@ def _decode_frame_preview(frame: bytes) -> str:
     return frame[:160].decode("utf-8", errors="replace")
 
 
-def _encode_stdin_frame(envelope: JsonRpcEnvelope) -> bytes:
+def _encode_stdin_frame(envelope: JsonRpcEnvelopeLike) -> bytes:
     return (serialize_jsonrpc_envelope(envelope) + "\n").encode("utf-8")
 
 

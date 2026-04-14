@@ -1,11 +1,47 @@
 """JSON-RPC framing and connection management layer."""
 
 from .connection import JsonRpcConnection
-from .jsonrpc import JsonRpcEnvelope, parse_jsonrpc_envelope, serialize_jsonrpc_envelope
+from .jsonrpc import (
+    JSON_RPC_VERSION,
+    JsonRpcEnvelope,
+    JsonRpcEnvelopeKind,
+    JsonRpcErrorObject,
+    JsonRpcErrorResponse,
+    JsonRpcId,
+    JsonRpcNotification,
+    JsonRpcRequest,
+    JsonRpcResponseEnvelope,
+    JsonRpcSuccessResponse,
+    classify_jsonrpc_envelope,
+    coerce_jsonrpc_envelope,
+    is_jsonrpc_error_response_envelope,
+    is_jsonrpc_notification_envelope,
+    is_jsonrpc_request_envelope,
+    is_jsonrpc_response_envelope,
+    is_jsonrpc_success_response_envelope,
+    parse_jsonrpc_envelope,
+    serialize_jsonrpc_envelope,
+)
 
 __all__ = [
+    "JSON_RPC_VERSION",
     "JsonRpcConnection",
     "JsonRpcEnvelope",
+    "JsonRpcEnvelopeKind",
+    "JsonRpcErrorObject",
+    "JsonRpcErrorResponse",
+    "JsonRpcId",
+    "JsonRpcNotification",
+    "JsonRpcRequest",
+    "JsonRpcResponseEnvelope",
+    "JsonRpcSuccessResponse",
+    "classify_jsonrpc_envelope",
+    "coerce_jsonrpc_envelope",
+    "is_jsonrpc_error_response_envelope",
+    "is_jsonrpc_notification_envelope",
+    "is_jsonrpc_request_envelope",
+    "is_jsonrpc_response_envelope",
+    "is_jsonrpc_success_response_envelope",
     "parse_jsonrpc_envelope",
     "serialize_jsonrpc_envelope",
 ]

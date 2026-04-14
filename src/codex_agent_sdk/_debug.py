@@ -6,7 +6,7 @@ import logging
 import os
 from collections.abc import Mapping, Sequence
 
-from .rpc.jsonrpc import JsonRpcEnvelope
+from .rpc.jsonrpc import JsonRpcEnvelopeLike, classify_jsonrpc_envelope, coerce_jsonrpc_envelope
 
 DEFAULT_DEBUG_LOGGER_NAME = "codex_agent_sdk.debug"
 MAX_DEBUG_ITEMS = 8
@@ -158,10 +158,11 @@ class DebugLogger:
             error_type=error.__class__.__name__,
         )
 
-    def log_frame(self, *, direction: str, envelope: JsonRpcEnvelope) -> None:
-        kind = _frame_kind(envelope)
-        request_id = envelope.get("id")
-        method = envelope.get("method")
+    def log_frame(self, *, direction: str, envelope: JsonRpcEnvelopeLike) -> None:
+        normalized = coerce_jsonrpc_envelope(envelope)
+        kind = normalized.kind
+        request_id = normalized.request_id
+        method = normalized.method_name
         message = f"jsonrpc {direction} {kind}"
         if request_id is not None:
             message += f" id={request_id!r}"
@@ -175,7 +176,7 @@ class DebugLogger:
             kind=kind,
             request_id=request_id,
             method=method if isinstance(method, str) else None,
-            frame_preview=sanitize_debug_value(envelope),
+            frame_preview=sanitize_debug_value(normalized.to_wire_dict()),
         )
 
     def log_frame_read_failed(self, *, error: BaseException, preview: str | None = None) -> None:
@@ -190,12 +191,13 @@ class DebugLogger:
     def log_frame_write_failed(
         self,
         *,
-        envelope: JsonRpcEnvelope,
+        envelope: JsonRpcEnvelopeLike,
         error: BaseException,
     ) -> None:
-        kind = _frame_kind(envelope)
-        request_id = envelope.get("id")
-        method = envelope.get("method")
+        normalized = coerce_jsonrpc_envelope(envelope)
+        kind = normalized.kind
+        request_id = normalized.request_id
+        method = normalized.method_name
         message = f"jsonrpc outbound {kind} failed"
         if request_id is not None:
             message += f" id={request_id!r}"
@@ -210,7 +212,7 @@ class DebugLogger:
             request_id=request_id,
             method=method if isinstance(method, str) else None,
             error_type=error.__class__.__name__,
-            frame_preview=sanitize_debug_value(envelope),
+            frame_preview=sanitize_debug_value(normalized.to_wire_dict()),
         )
 
     def _emit(self, event: str, message: str, **fields: object) -> None:
@@ -274,11 +276,7 @@ def sanitize_debug_value(
 
 
 def _frame_kind(envelope: Mapping[str, object]) -> str:
-    if "method" in envelope and "id" in envelope:
-        return "request"
-    if "method" in envelope:
-        return "notification"
-    return "response"
+    return classify_jsonrpc_envelope(envelope)
 
 
 def _summarize_command(command: tuple[str, ...]) -> tuple[str, ...]:

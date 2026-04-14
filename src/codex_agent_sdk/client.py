@@ -22,6 +22,7 @@ from .events import TurnEvent
 from .options import AppServerConfig, CodexOptions
 from .results import TurnHandle
 from .rpc.connection import JsonRpcConnection
+from .rpc.jsonrpc import JsonRpcNotification, JsonRpcRequest
 from .transport import StdioTransport
 
 
@@ -116,12 +117,12 @@ class AppServerClient:
         self._require_initialized()
         await self._connection.notify(method, params)
 
-    def iter_notifications(self) -> AsyncIterator[object]:
+    def iter_notifications(self) -> AsyncIterator[JsonRpcNotification]:
         """Iterate raw JSON-RPC notifications from the server."""
 
         return self._connection.iter_notifications()
 
-    def iter_server_requests(self) -> AsyncIterator[object]:
+    def iter_server_requests(self) -> AsyncIterator[JsonRpcRequest]:
         """Iterate raw server-initiated JSON-RPC requests."""
 
         return self._connection.iter_server_requests()

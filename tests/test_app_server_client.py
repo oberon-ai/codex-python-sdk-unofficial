@@ -15,6 +15,7 @@ from codex_agent_sdk import (
     StartupTimeoutError,
     TransportClosedError,
 )
+from codex_agent_sdk.rpc import JsonRpcNotification
 from codex_agent_sdk.testing import (
     FakeAppServerScript,
     close_connection,
@@ -228,5 +229,7 @@ def _write_executable_script(path: Path, body: str) -> Path:
     return path
 
 
-async def _read_next_notification(notifications: AsyncIterator[object]) -> object:
+async def _read_next_notification(
+    notifications: AsyncIterator[JsonRpcNotification],
+) -> JsonRpcNotification:
     return await anext(notifications)

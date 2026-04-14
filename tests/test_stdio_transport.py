@@ -20,6 +20,7 @@ from codex_agent_sdk import (
     TransportWriteError,
 )
 from codex_agent_sdk.options import AppServerConfig
+from codex_agent_sdk.rpc import JsonRpcNotification, JsonRpcRequest, JsonRpcSuccessResponse
 from codex_agent_sdk.transport import StdioTransport
 
 IO_TIMEOUT_SECONDS = 1.0
@@ -219,7 +220,8 @@ async def test_read_stdout_envelope_decodes_chunked_jsonl_frames(tmp_path: Path)
             timeout=IO_TIMEOUT_SECONDS,
         )
 
-    assert envelope == {
+    assert isinstance(envelope, JsonRpcRequest)
+    assert envelope.to_wire_dict() == {
         "id": 1,
         "method": "thread/started",
         "params": {"threadId": "thread_123"},
@@ -309,7 +311,8 @@ async def test_read_stdout_envelope_returns_none_on_clean_eof_between_frames(
             timeout=IO_TIMEOUT_SECONDS,
         )
 
-    assert envelope == {"id": 7, "result": {"ok": True}}
+    assert isinstance(envelope, JsonRpcSuccessResponse)
+    assert envelope.to_wire_dict() == {"id": 7, "result": {"ok": True}}
     assert eof_message is None
 
 
@@ -346,7 +349,8 @@ async def test_read_stdout_envelope_raises_process_exit_error_after_unexpected_e
             )
 
     error = exc_info.value
-    assert envelope == {"id": 7, "result": {"ok": True}}
+    assert isinstance(envelope, JsonRpcSuccessResponse)
+    assert envelope.to_wire_dict() == {"id": 7, "result": {"ok": True}}
     assert error.exit_code == 23
     assert error.stderr_tail is not None
     assert "unexpected exit after response" in error.stderr_tail
@@ -523,7 +527,8 @@ async def test_debug_logging_records_redacted_lifecycle_and_frame_metadata(
         )
 
     assert envelope is not None
-    assert envelope["method"] == "item/updated"
+    assert isinstance(envelope, JsonRpcNotification)
+    assert envelope.method == "item/updated"
 
     records = [record for record in caplog.records if record.name == logger.name]
     assert [_record_extra(record, "codex_debug_event") for record in records] == [

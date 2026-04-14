@@ -15,10 +15,19 @@ from ..errors import (
     map_jsonrpc_error,
 )
 from ..transport import StdioTransport
-from .jsonrpc import JsonRpcEnvelope
+from .jsonrpc import (
+    JsonRpcEnvelope,
+    JsonRpcErrorResponse,
+    JsonRpcId,
+    JsonRpcNotification,
+    JsonRpcRequest,
+    JsonRpcResponseEnvelope,
+    JsonRpcSuccessResponse,
+    is_jsonrpc_notification_envelope,
+    is_jsonrpc_request_envelope,
+    is_jsonrpc_response_envelope,
+)
 
-JsonRpcId = str | int | None
-JSON_RPC_VERSION = "2.0"
 _STREAM_CLOSED = object()
 
 
@@ -34,8 +43,8 @@ class JsonRpcConnection:
     def __init__(self, transport: StdioTransport | None = None) -> None:
         self.transport = transport or StdioTransport()
         self._pending_requests: dict[JsonRpcId, _PendingRequest] = {}
-        self._notification_queue: asyncio.Queue[JsonRpcEnvelope] = asyncio.Queue()
-        self._server_request_queue: asyncio.Queue[JsonRpcEnvelope] = asyncio.Queue()
+        self._notification_queue: asyncio.Queue[JsonRpcNotification] = asyncio.Queue()
+        self._server_request_queue: asyncio.Queue[JsonRpcRequest] = asyncio.Queue()
         self._request_id = 0
         self._request_id_lock = asyncio.Lock()
         self._start_lock = asyncio.Lock()
@@ -119,23 +128,23 @@ class JsonRpcConnection:
             await self._fail_connection(exc)
             raise
 
-    async def iter_notifications(self) -> AsyncIterator[JsonRpcEnvelope]:
+    async def iter_notifications(self) -> AsyncIterator[JsonRpcNotification]:
         """Iterate raw JSON-RPC notifications until close or connection failure."""
 
         while True:
             next_item = await self._next_stream_item(self._notification_queue)
             if next_item is _STREAM_CLOSED:
                 return
-            yield cast(JsonRpcEnvelope, next_item)
+            yield cast(JsonRpcNotification, next_item)
 
-    async def iter_server_requests(self) -> AsyncIterator[JsonRpcEnvelope]:
+    async def iter_server_requests(self) -> AsyncIterator[JsonRpcRequest]:
         """Iterate raw server-initiated JSON-RPC requests until close or failure."""
 
         while True:
             next_item = await self._next_stream_item(self._server_request_queue)
             if next_item is _STREAM_CLOSED:
                 return
-            yield cast(JsonRpcEnvelope, next_item)
+            yield cast(JsonRpcRequest, next_item)
 
     async def close(self) -> None:
         """Close the connection and release all pending waiters."""
@@ -177,19 +186,19 @@ class JsonRpcConnection:
             await self._fail_connection(exc)
 
     async def _dispatch_envelope(self, envelope: JsonRpcEnvelope) -> None:
-        if _is_response_envelope(envelope):
-            self._handle_response(envelope)
+        if is_jsonrpc_response_envelope(envelope):
+            self._handle_response(cast(JsonRpcResponseEnvelope, envelope))
             return
-        if _is_request_envelope(envelope):
-            await self._server_request_queue.put(envelope)
+        if is_jsonrpc_request_envelope(envelope):
+            await self._server_request_queue.put(cast(JsonRpcRequest, envelope))
             return
-        if _is_notification_envelope(envelope):
-            await self._notification_queue.put(envelope)
+        if is_jsonrpc_notification_envelope(envelope):
+            await self._notification_queue.put(cast(JsonRpcNotification, envelope))
             return
         raise UnexpectedMessageError(f"received invalid JSON-RPC envelope shape: {envelope!r}")
 
-    def _handle_response(self, envelope: JsonRpcEnvelope) -> None:
-        request_id = cast(JsonRpcId, envelope.get("id"))
+    def _handle_response(self, envelope: JsonRpcResponseEnvelope) -> None:
+        request_id = envelope.request_id
         pending = self._pending_requests.pop(request_id, None)
         if pending is None:
             raise UnexpectedMessageError(
@@ -200,41 +209,24 @@ class JsonRpcConnection:
         if future.done():
             return
 
-        has_result = "result" in envelope
-        has_error = "error" in envelope
-        if has_result == has_error:
-            raise UnexpectedMessageError(
-                "response for request_id="
-                f"{request_id!r} must contain exactly one of result or error"
-            )
-
-        if has_error:
-            error_payload = envelope["error"]
-            if not isinstance(error_payload, dict):
-                raise UnexpectedMessageError(
-                    f"response error for request_id={request_id!r} must be an object"
-                )
-
-            code = error_payload.get("code")
-            message = error_payload.get("message")
-            if not isinstance(code, int) or not isinstance(message, str):
-                raise UnexpectedMessageError(
-                    "response error for request_id="
-                    f"{request_id!r} must include int code and str message"
-                )
-
+        if isinstance(envelope, JsonRpcErrorResponse):
+            error_payload = envelope.error
             future.set_exception(
                 map_jsonrpc_error(
-                    code,
-                    message,
-                    data=error_payload.get("data"),
+                    error_payload.code,
+                    error_payload.message,
+                    data=error_payload.data if error_payload.has_data else None,
                     method=pending.method,
                     request_id=request_id,
                 )
             )
             return
 
-        future.set_result(envelope.get("result"))
+        if not isinstance(envelope, JsonRpcSuccessResponse):
+            raise UnexpectedMessageError(
+                f"received non-response envelope while handling request_id={request_id!r}"
+            )
+        future.set_result(envelope.result)
 
     async def _await_request_result(
         self,
@@ -264,8 +256,8 @@ class JsonRpcConnection:
 
     async def _next_stream_item(
         self,
-        queue: asyncio.Queue[JsonRpcEnvelope],
-    ) -> JsonRpcEnvelope | object:
+        queue: asyncio.Queue[JsonRpcNotification] | asyncio.Queue[JsonRpcRequest],
+    ) -> JsonRpcNotification | JsonRpcRequest | object:
         if not queue.empty():
             return queue.get_nowait()
         if self._closed_event.is_set():
@@ -339,14 +331,12 @@ def _build_request_envelope(
     method: str,
     params: object | None,
 ) -> JsonRpcEnvelope:
-    envelope: JsonRpcEnvelope = {
-        "jsonrpc": JSON_RPC_VERSION,
-        "id": request_id,
-        "method": method,
-    }
-    if params is not None:
-        envelope["params"] = params
-    return envelope
+    return JsonRpcRequest(
+        id=request_id,
+        method=method,
+        params=params,
+        _params_present=params is not None,
+    )
 
 
 def _build_notification_envelope(
@@ -354,28 +344,10 @@ def _build_notification_envelope(
     method: str,
     params: object | None,
 ) -> JsonRpcEnvelope:
-    envelope: JsonRpcEnvelope = {
-        "jsonrpc": JSON_RPC_VERSION,
-        "method": method,
-    }
-    if params is not None:
-        envelope["params"] = params
-    return envelope
-
-
-def _is_request_envelope(envelope: JsonRpcEnvelope) -> bool:
-    return "method" in envelope and "id" in envelope
-
-
-def _is_notification_envelope(envelope: JsonRpcEnvelope) -> bool:
-    return "method" in envelope and "id" not in envelope
-
-
-def _is_response_envelope(envelope: JsonRpcEnvelope) -> bool:
-    return (
-        "method" not in envelope
-        and "id" in envelope
-        and ("result" in envelope or "error" in envelope)
+    return JsonRpcNotification(
+        method=method,
+        params=params,
+        _params_present=params is not None,
     )
 
 
