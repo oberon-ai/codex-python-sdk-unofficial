@@ -101,6 +101,57 @@ python scripts/generate_protocol_models.py --check
 The script fails fast if the installed `datamodel-code-generator` version does
 not match the repo pin in `requirements/codegen.txt`.
 
+The test suite also carries a regression layer that checks:
+
+- the generated stable module header still matches the pinned stable schema
+  hash, generator pin, and codegen flag fingerprint
+- the checked-in stable notification and server-request registries still match
+  the current renderer output exactly
+- the repo still tracks both stable and experimental schema snapshots while
+  defaulting code generation to the stable snapshot
+
+That keeps ordinary `python -m pytest` runs useful even when the maintainer-only
+codegen toolchain is not installed. In a maintainer environment with
+`datamodel-code-generator` and `ruff` available, the regression suite also runs
+`python scripts/generate_protocol_models.py --check` directly.
+
+## Intentional Snapshot Updates
+
+When Codex actually changed upstream, use this workflow:
+
+1. Refresh the vendored schema snapshots first.
+   - Normal pin-preserving refresh:
+
+   ```bash
+   python scripts/vendor_protocol_schema.py
+   ```
+
+   - Explicit pin bump when the Codex CLI version changed:
+
+   ```bash
+   python scripts/vendor_protocol_schema.py --allow-version-change
+   ```
+
+2. Regenerate the checked-in Python artifacts:
+
+   ```bash
+   python scripts/generate_protocol_models.py
+   ```
+
+3. Re-run the no-write checks and the relevant tests:
+
+   ```bash
+   python scripts/vendor_protocol_schema.py --check
+   python scripts/generate_protocol_models.py --check
+   python -m pytest tests/test_codegen_regressions.py -q
+   ```
+
+4. Review the diff intentionally.
+   - The stable generated files should show updated provenance header lines when
+     the stable schema hash, codegen pin, or renderer inputs changed.
+   - Experimental-only schema changes should stay confined to the vendored
+     experimental snapshot unless the stable snapshot changed too.
+
 ## Why The Scope Stops At Stable Models
 
 The repo's stable-by-default direction still applies here:

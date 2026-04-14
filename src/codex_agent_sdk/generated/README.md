@@ -31,6 +31,9 @@ Contributor rules:
   `codex_agent_sdk.generated.stable_server_request_registry`.
 - Verify drift with
   `python scripts/generate_protocol_models.py --check`.
+- Generated modules and registries carry deterministic provenance header
+  comments so ordinary test runs can detect stale schema pins or codegen input
+  changes without relying only on manual diff review.
 
 Later code generation tasks can add machine-written modules here without
 restructuring the rest of the SDK package.

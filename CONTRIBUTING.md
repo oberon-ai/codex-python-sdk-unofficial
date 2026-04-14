@@ -79,6 +79,32 @@ the upstream method inventory plus handwritten server-request param models.
 The script fails fast if the installed `datamodel-code-generator` version does
 not match the repo pin in `requirements/codegen.txt`.
 
+The generated files now embed deterministic provenance comments for:
+
+- the stable schema artifact path
+- the stable schema SHA-256 from `vendor_manifest.json`
+- the pinned `datamodel-code-generator` version
+- a fingerprint of the codegen flags or derived registry specs
+
+That means normal `python -m pytest` runs can fail loudly when the vendored
+stable schema pin or codegen settings change without a refresh, even in an
+environment that does not have the maintainer-only codegen toolchain installed.
+
+When the upstream Codex schema actually changed, use this order:
+
+```bash
+python scripts/vendor_protocol_schema.py --check
+python scripts/vendor_protocol_schema.py --allow-version-change  # only when bumping the Codex CLI pin
+python scripts/generate_protocol_models.py
+python scripts/generate_protocol_models.py --check
+python -m pytest tests/test_codegen_regressions.py -q
+```
+
+Review the generated-file header diffs intentionally. Stable generated modules
+should only move when the stable snapshot or codegen inputs changed; the
+experimental snapshot is still checked in for drift detection, but stable code
+generation must keep defaulting to the stable snapshot.
+
 Generated `BaseModel` classes intentionally use snake_case Python attributes
 with camelCase wire aliases. The shared `WireModel` and `WireRootModel` bases
 make `model_dump()` emit compact wire keys by default, while
