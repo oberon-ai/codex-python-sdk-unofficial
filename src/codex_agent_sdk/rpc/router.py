@@ -1,20 +1,36 @@
-"""Request correlation helpers for the JSON-RPC connection layer."""
+"""Request correlation and inbound routing helpers for the JSON-RPC layer."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import OrderedDict
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import Literal, TypeAlias
+from typing import Generic, Literal, TypeAlias, TypeVar, cast
 
 from ..errors import (
     DuplicateRequestIdError,
     DuplicateResponseError,
     LateResponseError,
+    TransportClosedError,
+    UnexpectedMessageError,
     UnknownResponseIdError,
     map_jsonrpc_error,
 )
-from .jsonrpc import JsonRpcErrorResponse, JsonRpcId, JsonRpcResponseEnvelope
+from ..transport import StdioTransport
+from .jsonrpc import (
+    JsonRpcEnvelope,
+    JsonRpcErrorResponse,
+    JsonRpcId,
+    JsonRpcNotification,
+    JsonRpcRequest,
+    JsonRpcResponseEnvelope,
+    is_jsonrpc_notification_envelope,
+    is_jsonrpc_request_envelope,
+    is_jsonrpc_response_envelope,
+)
 
 FinalizedRequestStatus: TypeAlias = Literal[
     "completed",
@@ -23,6 +39,11 @@ FinalizedRequestStatus: TypeAlias = Literal[
     "closed",
     "failed",
 ]
+FatalDispatchCallback: TypeAlias = Callable[[BaseException], Awaitable[None]]
+
+_LOGGER = logging.getLogger(__name__)
+_STREAM_CLOSED = object()
+_T = TypeVar("_T")
 
 
 @dataclass(slots=True)
@@ -38,6 +59,75 @@ class PendingJsonRpcRequest:
 class _FinalizedRequest:
     method: str
     status: FinalizedRequestStatus
+
+
+class _InboundMessageStream(Generic[_T]):
+    """Single-consumer async stream with explicit close and terminal-error state."""
+
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue[_T] = asyncio.Queue()
+        self._closed_event = asyncio.Event()
+        self._terminal_error: BaseException | None = None
+
+    @property
+    def is_closed(self) -> bool:
+        return self._closed_event.is_set()
+
+    @property
+    def terminal_error(self) -> BaseException | None:
+        return self._terminal_error
+
+    async def put(self, item: _T) -> bool:
+        if self._closed_event.is_set():
+            return False
+        await self._queue.put(item)
+        return True
+
+    def close(self, *, error: BaseException | None = None) -> None:
+        if error is not None and self._terminal_error is None:
+            self._terminal_error = error
+        self._closed_event.set()
+
+    async def iter_items(self) -> AsyncIterator[_T]:
+        while True:
+            next_item = await self._next_item()
+            if next_item is _STREAM_CLOSED:
+                return
+            yield cast(_T, next_item)
+
+    async def _next_item(self) -> _T | object:
+        if not self._queue.empty():
+            return self._queue.get_nowait()
+        if self._closed_event.is_set():
+            error = self._terminal_error
+            if error is None:
+                return _STREAM_CLOSED
+            raise error
+
+        get_task = asyncio.create_task(self._queue.get(), name="codex-agent-sdk.stream-get")
+        closed_task = asyncio.create_task(
+            self._closed_event.wait(),
+            name="codex-agent-sdk.stream-close-wait",
+        )
+        done, pending = await asyncio.wait(
+            {get_task, closed_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
+
+        if get_task in done:
+            return get_task.result()
+
+        if not self._queue.empty():
+            return await self._queue.get()
+
+        error = self._terminal_error
+        if error is None:
+            return _STREAM_CLOSED
+        raise error
 
 
 class JsonRpcRequestIdAllocator:
@@ -239,8 +329,159 @@ class JsonRpcRequestRegistry:
             self._finalized_requests.popitem(last=False)
 
 
+class JsonRpcNotificationBus:
+    """Single-consumer bus for raw JSON-RPC notifications."""
+
+    def __init__(self) -> None:
+        self._stream: _InboundMessageStream[JsonRpcNotification] = _InboundMessageStream()
+
+    @property
+    def is_closed(self) -> bool:
+        return self._stream.is_closed
+
+    @property
+    def terminal_error(self) -> BaseException | None:
+        return self._stream.terminal_error
+
+    async def publish(self, notification: JsonRpcNotification) -> None:
+        await self._stream.put(notification)
+
+    def close(self, *, error: BaseException | None = None) -> None:
+        self._stream.close(error=error)
+
+    def iter_notifications(self) -> AsyncIterator[JsonRpcNotification]:
+        return self._stream.iter_items()
+
+
+class JsonRpcServerRequestRouter:
+    """Single-consumer router for raw server-initiated JSON-RPC requests."""
+
+    def __init__(self) -> None:
+        self._stream: _InboundMessageStream[JsonRpcRequest] = _InboundMessageStream()
+
+    @property
+    def is_closed(self) -> bool:
+        return self._stream.is_closed
+
+    @property
+    def terminal_error(self) -> BaseException | None:
+        return self._stream.terminal_error
+
+    async def route_request(self, request: JsonRpcRequest) -> None:
+        await self._stream.put(request)
+
+    def close(self, *, error: BaseException | None = None) -> None:
+        self._stream.close(error=error)
+
+    def iter_requests(self) -> AsyncIterator[JsonRpcRequest]:
+        return self._stream.iter_items()
+
+
+class JsonRpcBackgroundDispatcher:
+    """Own one connection reader task and route inbound frames to the right subsystem."""
+
+    def __init__(
+        self,
+        *,
+        transport: StdioTransport,
+        requests: JsonRpcRequestRegistry,
+        notifications: JsonRpcNotificationBus,
+        server_requests: JsonRpcServerRequestRouter,
+        on_fatal_error: FatalDispatchCallback | None = None,
+    ) -> None:
+        self.transport = transport
+        self.requests = requests
+        self.notifications = notifications
+        self.server_requests = server_requests
+        self._on_fatal_error = on_fatal_error
+        self._start_lock = asyncio.Lock()
+        self._stop_lock = asyncio.Lock()
+        self._dispatch_task: asyncio.Task[None] | None = None
+        self._stop_requested = False
+
+    @property
+    def dispatch_task(self) -> asyncio.Task[None] | None:
+        return self._dispatch_task
+
+    @property
+    def is_running(self) -> bool:
+        task = self._dispatch_task
+        return task is not None and not task.done()
+
+    async def start(self) -> None:
+        async with self._start_lock:
+            if self._dispatch_task is not None:
+                return
+            self._stop_requested = False
+            self._dispatch_task = asyncio.create_task(
+                self._dispatch_loop(),
+                name="codex-agent-sdk.rpc-dispatch",
+            )
+
+    async def stop(self) -> None:
+        async with self._stop_lock:
+            self._stop_requested = True
+            task = self._dispatch_task
+
+        if task is None or task is asyncio.current_task():
+            return
+        await asyncio.shield(task)
+
+    async def dispatch_envelope(self, envelope: JsonRpcEnvelope) -> None:
+        if is_jsonrpc_response_envelope(envelope):
+            await self._dispatch_response(cast(JsonRpcResponseEnvelope, envelope))
+            return
+        if is_jsonrpc_request_envelope(envelope):
+            await self.server_requests.route_request(cast(JsonRpcRequest, envelope))
+            return
+        if is_jsonrpc_notification_envelope(envelope):
+            await self.notifications.publish(cast(JsonRpcNotification, envelope))
+            return
+        raise UnexpectedMessageError(f"received invalid JSON-RPC envelope shape: {envelope!r}")
+
+    async def _dispatch_loop(self) -> None:
+        try:
+            while True:
+                envelope = await self.transport.read_stdout_envelope()
+                if envelope is None:
+                    if self._stop_requested:
+                        return
+                    raise TransportClosedError(
+                        "app-server stdout reached EOF while requests were still possible",
+                        stderr_tail=self.transport.stderr_tail,
+                    )
+                await self.dispatch_envelope(envelope)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:
+            if self._stop_requested:
+                return
+            await self._fail_dispatch(exc)
+
+    async def _dispatch_response(self, envelope: JsonRpcResponseEnvelope) -> None:
+        try:
+            await self.requests.resolve_response(envelope)
+        except LateResponseError as exc:
+            _LOGGER.warning(
+                "ignoring late JSON-RPC response for request_id=%r method=%s release_reason=%s",
+                exc.request_id,
+                exc.method,
+                exc.release_reason,
+            )
+
+    async def _fail_dispatch(self, exc: BaseException) -> None:
+        await self.requests.fail_all(exc, reason="failed")
+        self.notifications.close(error=exc)
+        self.server_requests.close(error=exc)
+        if self._on_fatal_error is not None:
+            await self._on_fatal_error(exc)
+
+
 __all__ = [
+    "JsonRpcBackgroundDispatcher",
+    "JsonRpcNotificationBus",
     "JsonRpcRequestIdAllocator",
     "JsonRpcRequestRegistry",
+    "JsonRpcServerRequestRouter",
     "PendingJsonRpcRequest",
 ]

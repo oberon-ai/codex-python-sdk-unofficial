@@ -26,6 +26,7 @@ from codex_agent_sdk.testing import (
     expect_notification,
     expect_request,
     send_response,
+    send_server_request,
     sleep_action,
 )
 
@@ -106,7 +107,7 @@ async def test_late_response_after_timeout_is_logged_and_connection_stays_usable
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.WARNING, logger="codex_agent_sdk.rpc.connection")
+    caplog.set_level(logging.WARNING, logger="codex_agent_sdk.rpc.router")
     script = FakeAppServerScript.from_actions(
         expect_request("initialize", save_as="initialize"),
         send_response(request_ref="initialize", result={"protocolVersion": 2}),
@@ -281,6 +282,43 @@ async def test_duplicate_response_id_fails_connection(tmp_path: Path) -> None:
 
     assert started == {"threadId": "thread_new", "status": "started"}
     assert exc_info.value.method == "thread/start"
+
+
+@pytest.mark.asyncio
+async def test_server_request_iterator_receives_server_initiated_requests(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        send_server_request(
+            "approval/requested",
+            request_id="approval-1",
+            params={
+                "threadId": "thread_1",
+                "turnId": "turn_1",
+                "kind": "command",
+            },
+        ),
+        sleep_action(300),
+    )
+    launcher = _write_fake_codex_launcher(tmp_path, script, stem="server_request_launcher.py")
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        request = await asyncio.wait_for(
+            anext(client.iter_server_requests()),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+    assert request.method == "approval/requested"
+    assert request.request_id == "approval-1"
+    assert request.params == {
+        "threadId": "thread_1",
+        "turnId": "turn_1",
+        "kind": "command",
+    }
 
 
 @pytest.mark.asyncio

@@ -3,16 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import AsyncIterator
-from contextlib import suppress
-from typing import cast
 
 from ..errors import (
-    LateResponseError,
     RequestTimeoutError,
     TransportClosedError,
-    UnexpectedMessageError,
 )
 from ..transport import StdioTransport
 from .jsonrpc import (
@@ -20,15 +15,13 @@ from .jsonrpc import (
     JsonRpcId,
     JsonRpcNotification,
     JsonRpcRequest,
-    JsonRpcResponseEnvelope,
-    is_jsonrpc_notification_envelope,
-    is_jsonrpc_request_envelope,
-    is_jsonrpc_response_envelope,
 )
-from .router import JsonRpcRequestRegistry
-
-_STREAM_CLOSED = object()
-_LOGGER = logging.getLogger(__name__)
+from .router import (
+    JsonRpcBackgroundDispatcher,
+    JsonRpcNotificationBus,
+    JsonRpcRequestRegistry,
+    JsonRpcServerRequestRouter,
+)
 
 
 class JsonRpcConnection:
@@ -37,13 +30,18 @@ class JsonRpcConnection:
     def __init__(self, transport: StdioTransport | None = None) -> None:
         self.transport = transport or StdioTransport()
         self._requests = JsonRpcRequestRegistry()
-        self._notification_queue: asyncio.Queue[JsonRpcNotification] = asyncio.Queue()
-        self._server_request_queue: asyncio.Queue[JsonRpcRequest] = asyncio.Queue()
+        self._notifications = JsonRpcNotificationBus()
+        self._server_requests = JsonRpcServerRequestRouter()
         self._start_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
-        self._reader_task: asyncio.Task[None] | None = None
+        self._dispatcher = JsonRpcBackgroundDispatcher(
+            transport=self.transport,
+            requests=self._requests,
+            notifications=self._notifications,
+            server_requests=self._server_requests,
+            on_fatal_error=self._fail_connection,
+        )
         self._closed_event = asyncio.Event()
-        self._close_requested = False
         self._terminal_error: BaseException | None = None
 
     @property
@@ -55,20 +53,17 @@ class JsonRpcConnection:
         return self._closed_event.is_set()
 
     async def start(self, *, startup_timeout: float | None = None) -> None:
-        """Start the subprocess transport and the background reader once."""
+        """Start the subprocess transport and the background dispatcher once."""
 
         self._raise_if_closed()
 
         async with self._start_lock:
             self._raise_if_closed()
-            if self._reader_task is not None:
+            if self._dispatcher.dispatch_task is not None:
                 return
 
             await self.transport.start(timeout=startup_timeout)
-            self._reader_task = asyncio.create_task(
-                self._reader_loop(),
-                name="codex-agent-sdk.rpc-reader",
-            )
+            await self._dispatcher.start()
 
     async def request(
         self,
@@ -122,83 +117,30 @@ class JsonRpcConnection:
     async def iter_notifications(self) -> AsyncIterator[JsonRpcNotification]:
         """Iterate raw JSON-RPC notifications until close or connection failure."""
 
-        while True:
-            next_item = await self._next_stream_item(self._notification_queue)
-            if next_item is _STREAM_CLOSED:
-                return
-            yield cast(JsonRpcNotification, next_item)
+        async for notification in self._notifications.iter_notifications():
+            yield notification
 
     async def iter_server_requests(self) -> AsyncIterator[JsonRpcRequest]:
         """Iterate raw server-initiated JSON-RPC requests until close or failure."""
 
-        while True:
-            next_item = await self._next_stream_item(self._server_request_queue)
-            if next_item is _STREAM_CLOSED:
-                return
-            yield cast(JsonRpcRequest, next_item)
+        async for request in self._server_requests.iter_requests():
+            yield request
 
     async def close(self) -> None:
         """Close the connection and release all pending waiters."""
 
-        reader_task = self._reader_task
         async with self._close_lock:
             if not self._closed_event.is_set():
-                self._close_requested = True
                 await self._requests.fail_all(
                     TransportClosedError("app-server connection closed before request completion"),
                     reason="closed",
                 )
+                self._notifications.close()
+                self._server_requests.close()
                 self._closed_event.set()
 
         await self.transport.close()
-        if reader_task is not None and reader_task is not asyncio.current_task():
-            await asyncio.shield(reader_task)
-
-    async def _reader_loop(self) -> None:
-        try:
-            while True:
-                envelope = await self.transport.read_stdout_envelope()
-                if envelope is None:
-                    if self._close_requested:
-                        return
-                    await self._fail_connection(
-                        TransportClosedError(
-                            "app-server stdout reached EOF while requests were still possible",
-                            stderr_tail=self.transport.stderr_tail,
-                        )
-                    )
-                    return
-
-                await self._dispatch_envelope(envelope)
-        except asyncio.CancelledError:
-            raise
-        except BaseException as exc:
-            if self._close_requested:
-                return
-            await self._fail_connection(exc)
-
-    async def _dispatch_envelope(self, envelope: JsonRpcEnvelope) -> None:
-        if is_jsonrpc_response_envelope(envelope):
-            await self._handle_response(cast(JsonRpcResponseEnvelope, envelope))
-            return
-        if is_jsonrpc_request_envelope(envelope):
-            await self._server_request_queue.put(cast(JsonRpcRequest, envelope))
-            return
-        if is_jsonrpc_notification_envelope(envelope):
-            await self._notification_queue.put(cast(JsonRpcNotification, envelope))
-            return
-        raise UnexpectedMessageError(f"received invalid JSON-RPC envelope shape: {envelope!r}")
-
-    async def _handle_response(self, envelope: JsonRpcResponseEnvelope) -> None:
-        try:
-            await self._requests.resolve_response(envelope)
-        except LateResponseError as exc:
-            _LOGGER.warning(
-                "ignoring late JSON-RPC response for request_id=%r method=%s release_reason=%s",
-                exc.request_id,
-                exc.method,
-                exc.release_reason,
-            )
+        await self._dispatcher.stop()
 
     async def _await_request_result(
         self,
@@ -227,50 +169,14 @@ class JsonRpcConnection:
                 request_id=request_id,
             ) from exc
 
-    async def _next_stream_item(
-        self,
-        queue: asyncio.Queue[JsonRpcNotification] | asyncio.Queue[JsonRpcRequest],
-    ) -> JsonRpcNotification | JsonRpcRequest | object:
-        if not queue.empty():
-            return queue.get_nowait()
-        if self._closed_event.is_set():
-            error = self._terminal_error
-            if error is None:
-                return _STREAM_CLOSED
-            raise error
-
-        get_task = asyncio.create_task(queue.get(), name="codex-agent-sdk.stream-get")
-        closed_task = asyncio.create_task(
-            self._closed_event.wait(),
-            name="codex-agent-sdk.stream-close-wait",
-        )
-        done, pending = await asyncio.wait(
-            {get_task, closed_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in pending:
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
-
-        if get_task in done:
-            return get_task.result()
-
-        if not queue.empty():
-            return await queue.get()
-
-        error = self._terminal_error
-        if error is None:
-            return _STREAM_CLOSED
-        raise error
-
     async def _fail_connection(self, exc: BaseException) -> None:
         async with self._close_lock:
             if self._closed_event.is_set():
                 return
             self._terminal_error = exc
-            self._close_requested = True
             await self._requests.fail_all(exc, reason="failed")
+            self._notifications.close(error=exc)
+            self._server_requests.close(error=exc)
             self._closed_event.set()
 
         await self.transport.close()

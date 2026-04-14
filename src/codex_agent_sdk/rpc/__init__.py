@@ -22,10 +22,18 @@ from .jsonrpc import (
     parse_jsonrpc_envelope,
     serialize_jsonrpc_envelope,
 )
-from .router import JsonRpcRequestIdAllocator, JsonRpcRequestRegistry, PendingJsonRpcRequest
+from .router import (
+    JsonRpcBackgroundDispatcher,
+    JsonRpcNotificationBus,
+    JsonRpcRequestIdAllocator,
+    JsonRpcRequestRegistry,
+    JsonRpcServerRequestRouter,
+    PendingJsonRpcRequest,
+)
 
 __all__ = [
     "JSON_RPC_VERSION",
+    "JsonRpcBackgroundDispatcher",
     "JsonRpcConnection",
     "JsonRpcEnvelope",
     "JsonRpcEnvelopeKind",
@@ -33,10 +41,12 @@ __all__ = [
     "JsonRpcErrorResponse",
     "JsonRpcId",
     "JsonRpcNotification",
+    "JsonRpcNotificationBus",
     "JsonRpcRequest",
     "JsonRpcRequestIdAllocator",
     "JsonRpcRequestRegistry",
     "JsonRpcResponseEnvelope",
+    "JsonRpcServerRequestRouter",
     "JsonRpcSuccessResponse",
     "PendingJsonRpcRequest",
     "classify_jsonrpc_envelope",
