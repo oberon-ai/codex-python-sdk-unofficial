@@ -10,6 +10,14 @@ Contributor rules:
   `codex_agent_sdk.protocol` or `codex_agent_sdk.rpc`.
 - Prefer small generated surfaces and thin handwritten adapters rather than
   duplicating wire shapes manually across the codebase.
+- Generated `BaseModel` classes should expose Pythonic snake_case attributes
+  while keeping upstream wire keys as aliases.
+- The shared `codex_agent_sdk.protocol.pydantic.WireModel` and
+  `WireRootModel` bases keep validation and default serialization aligned with
+  the wire protocol:
+  construct with `thread_id=...`, accept `threadId` from wire payloads, and
+  emit compact wire-ready payloads from `model_dump()` unless a caller opts out
+  with `by_alias=False` or changes the dump defaults explicitly.
 - Use the vendored canonical schema snapshots under
   `tests/fixtures/schema_snapshots/` as generation input rather than whatever
   happens to be on a developer machine.

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,10 @@ CODEGEN_FLAGS = (
     "--field-constraints",
     "--use-subclass-enum",
     "--use-annotated",
+    "--snake-case-field",
+    "--allow-population-by-field-name",
+    "--base-class",
+    "codex_agent_sdk.protocol.pydantic.WireModel",
     "--disable-timestamp",
     "--no-allow-remote-refs",
     "--formatters",
@@ -151,7 +156,22 @@ def run_codegen(*, schema_path: Path) -> str:
             raise SystemExit(
                 "datamodel-code-generator failed while rendering the stable wire models."
             )
-        return rendered_output_path.read_text(encoding="utf-8")
+        return postprocess_rendered_output(rendered_output_path.read_text(encoding="utf-8"))
+
+
+def postprocess_rendered_output(rendered_text: str) -> str:
+    """Apply repo-specific conventions that the generator cannot express directly."""
+
+    processed = rendered_text.replace(
+        "from codex_agent_sdk.protocol.pydantic import WireModel",
+        "from codex_agent_sdk.protocol.pydantic import WireModel, WireRootModel",
+    )
+    return re.sub(
+        r"(\bclass\s+\w+\s*\()\s*RootModel\[",
+        r"\1WireRootModel[",
+        processed,
+        flags=re.MULTILINE,
+    )
 
 
 def write_output(*, target: GenerationTarget, rendered_text: str) -> None:

@@ -76,6 +76,9 @@ It should contain stable, user-meaningful defaults that map cleanly to thread-st
 Contract notes:
 
 - Field names should be Pythonic snake_case even if the wire protocol uses camelCase.
+- Generated wire models should accept upstream camelCase keys on validation and
+  emit upstream wire keys on default serialization so SDK internals do not need
+  per-field alias glue.
 - Fields that are experimental upstream should not appear unless `experimental_api=True` is enabled through `AppServerConfig`.
 - `output_schema` should not be stored on `CodexOptions`. It belongs on a single turn request.
 

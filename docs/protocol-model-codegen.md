@@ -25,6 +25,44 @@ tasks:
 - shared wire payloads such as `Thread`, `Turn`, `ThreadItem`, `UserInput`,
   and `AskForApproval`
 
+## Field Naming And Aliases
+
+Generated protocol models follow one fixed rule:
+
+- Python attributes are snake_case.
+- Validation accepts upstream wire keys such as `threadId`.
+- Default serialization emits compact upstream wire keys and omits unset
+  optionals.
+
+The implementation uses generator-native snake_case conversion plus the shared
+`codex_agent_sdk.protocol.pydantic.WireModel` / `WireRootModel` bases. A small
+repo-side postprocess swaps generated `RootModel[...]` wrappers onto
+`WireRootModel[...]`, because the upstream generator does not expose a direct
+root-model base hook. That keeps the rule uniform across regenerated models
+instead of hand-fixing aliases one field at a time, and it makes
+`model_dump()` / `model_dump_json()` default to wire-ready payloads.
+
+Example:
+
+```python
+from codex_agent_sdk.generated.stable import TurnStartParams
+
+turn_start = TurnStartParams(
+    thread_id="thread_123",
+    input=[{"type": "text", "text": "Find the failing tests."}],
+)
+
+assert turn_start.thread_id == "thread_123"
+assert turn_start.model_dump() == {
+    "threadId": "thread_123",
+    "input": [{"type": "text", "text": "Find the failing tests."}],
+}
+assert turn_start.model_dump(by_alias=False) == {
+    "thread_id": "thread_123",
+    "input": [{"type": "text", "text": "Find the failing tests."}],
+}
+```
+
 ## Rebuild And Drift Check
 
 Install the maintainer codegen toolchain first:

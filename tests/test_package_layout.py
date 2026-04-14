@@ -25,6 +25,7 @@ class PackageLayoutTests(unittest.TestCase):
             "codex_agent_sdk.generated",
             "codex_agent_sdk.generated.stable",
             "codex_agent_sdk.protocol",
+            "codex_agent_sdk.protocol.pydantic",
             "codex_agent_sdk.protocol.registries",
             "codex_agent_sdk.protocol.adapters",
             "codex_agent_sdk.testing",

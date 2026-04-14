@@ -73,6 +73,12 @@ python scripts/generate_protocol_models.py
 The script fails fast if the installed `datamodel-code-generator` version does
 not match the repo pin in `requirements/codegen.txt`.
 
+Generated `BaseModel` classes intentionally use snake_case Python attributes
+with camelCase wire aliases. The shared `WireModel` and `WireRootModel` bases
+make `model_dump()` emit compact wire keys by default, while
+`model_dump(by_alias=False)` still exposes Pythonic names for debugging or
+local transforms.
+
 ## Quality gates
 
 Run these commands from the repository root:

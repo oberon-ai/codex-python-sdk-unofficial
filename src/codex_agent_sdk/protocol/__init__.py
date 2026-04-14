@@ -1,3 +1,5 @@
-"""Handwritten protocol adapters and registries."""
+"""Handwritten protocol adapters, registries, and Pydantic helpers."""
 
-__all__: list[str] = []
+from .pydantic import WireModel, WireRootModel
+
+__all__ = ["WireModel", "WireRootModel"]

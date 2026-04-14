@@ -18,3 +18,6 @@ Current maintenance entrypoint:
   - Regenerates or verifies the checked-in stable Pydantic wire models at
     `src/codex_agent_sdk/generated/stable.py` from the pinned stable schema
     snapshot.
+  - Enforces the repo convention that generated `BaseModel` classes use
+    snake_case Python field names while preserving upstream wire aliases for
+    validation and default serialization.
