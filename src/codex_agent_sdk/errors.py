@@ -226,6 +226,64 @@ class UnexpectedMessageError(ProtocolError):
     """Raised when the SDK receives a message that does not fit its current state."""
 
 
+class RequestCorrelationError(UnexpectedMessageError):
+    """Raised when request/response correlation state is violated."""
+
+
+class DuplicateRequestIdError(RequestCorrelationError):
+    """Raised when the client attempts to register a request id twice."""
+
+    def __init__(self, request_id: JsonRpcId, *, method: str | None = None) -> None:
+        self.request_id = request_id
+        self.method = method
+        message = f"request_id={request_id!r} is already registered"
+        if method is not None:
+            message = f"{message}; method={method}"
+        super().__init__(message)
+
+
+class UnknownResponseIdError(RequestCorrelationError):
+    """Raised when the server responds with an id that is not known locally."""
+
+    def __init__(self, request_id: JsonRpcId) -> None:
+        self.request_id = request_id
+        super().__init__(f"received JSON-RPC response for unknown request_id={request_id!r}")
+
+
+class DuplicateResponseError(RequestCorrelationError):
+    """Raised when the server sends a second response for one request id."""
+
+    def __init__(self, request_id: JsonRpcId, *, method: str | None = None) -> None:
+        self.request_id = request_id
+        self.method = method
+        message = f"received duplicate JSON-RPC response for request_id={request_id!r}"
+        if method is not None:
+            message = f"{message}; method={method}"
+        super().__init__(message)
+
+
+class LateResponseError(RequestCorrelationError):
+    """Raised when a response arrives after the local waiter was released."""
+
+    def __init__(
+        self,
+        request_id: JsonRpcId,
+        *,
+        release_reason: str,
+        method: str | None = None,
+    ) -> None:
+        self.request_id = request_id
+        self.release_reason = release_reason
+        self.method = method
+        message = (
+            "received JSON-RPC response after local waiter release for "
+            f"request_id={request_id!r}; release_reason={release_reason}"
+        )
+        if method is not None:
+            message = f"{message}; method={method}"
+        super().__init__(message)
+
+
 class ResponseValidationError(ProtocolError):
     """Raised when a response payload does not match the expected schema."""
 

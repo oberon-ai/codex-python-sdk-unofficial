@@ -3,38 +3,32 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import suppress
-from dataclasses import dataclass
 from typing import cast
 
 from ..errors import (
+    LateResponseError,
     RequestTimeoutError,
     TransportClosedError,
     UnexpectedMessageError,
-    map_jsonrpc_error,
 )
 from ..transport import StdioTransport
 from .jsonrpc import (
     JsonRpcEnvelope,
-    JsonRpcErrorResponse,
     JsonRpcId,
     JsonRpcNotification,
     JsonRpcRequest,
     JsonRpcResponseEnvelope,
-    JsonRpcSuccessResponse,
     is_jsonrpc_notification_envelope,
     is_jsonrpc_request_envelope,
     is_jsonrpc_response_envelope,
 )
+from .router import JsonRpcRequestRegistry
 
 _STREAM_CLOSED = object()
-
-
-@dataclass(slots=True)
-class _PendingRequest:
-    method: str
-    future: asyncio.Future[object]
+_LOGGER = logging.getLogger(__name__)
 
 
 class JsonRpcConnection:
@@ -42,11 +36,9 @@ class JsonRpcConnection:
 
     def __init__(self, transport: StdioTransport | None = None) -> None:
         self.transport = transport or StdioTransport()
-        self._pending_requests: dict[JsonRpcId, _PendingRequest] = {}
+        self._requests = JsonRpcRequestRegistry()
         self._notification_queue: asyncio.Queue[JsonRpcNotification] = asyncio.Queue()
         self._server_request_queue: asyncio.Queue[JsonRpcRequest] = asyncio.Queue()
-        self._request_id = 0
-        self._request_id_lock = asyncio.Lock()
         self._start_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
         self._reader_task: asyncio.Task[None] | None = None
@@ -90,19 +82,18 @@ class JsonRpcConnection:
         await self.start()
         self._raise_if_closed()
 
-        request_id = await self._next_request_id()
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[object] = loop.create_future()
-        self._pending_requests[request_id] = _PendingRequest(method=method, future=future)
+        pending = await self._requests.register_request(method)
+        request_id = pending.request_id
+        future = pending.future
 
         envelope = _build_request_envelope(request_id=request_id, method=method, params=params)
         try:
             await self.transport.write_stdin_envelope(envelope)
         except asyncio.CancelledError:
-            self._drop_pending_request(request_id)
+            await self._requests.cancel_request(request_id, reason="cancelled")
             raise
         except BaseException as exc:
-            self._drop_pending_request(request_id)
+            await self._requests.fail_request(request_id, exc, reason="failed")
             await self._fail_connection(exc)
             raise
 
@@ -153,8 +144,9 @@ class JsonRpcConnection:
         async with self._close_lock:
             if not self._closed_event.is_set():
                 self._close_requested = True
-                self._release_pending_requests(
-                    TransportClosedError("app-server connection closed before request completion")
+                await self._requests.fail_all(
+                    TransportClosedError("app-server connection closed before request completion"),
+                    reason="closed",
                 )
                 self._closed_event.set()
 
@@ -187,7 +179,7 @@ class JsonRpcConnection:
 
     async def _dispatch_envelope(self, envelope: JsonRpcEnvelope) -> None:
         if is_jsonrpc_response_envelope(envelope):
-            self._handle_response(cast(JsonRpcResponseEnvelope, envelope))
+            await self._handle_response(cast(JsonRpcResponseEnvelope, envelope))
             return
         if is_jsonrpc_request_envelope(envelope):
             await self._server_request_queue.put(cast(JsonRpcRequest, envelope))
@@ -197,36 +189,16 @@ class JsonRpcConnection:
             return
         raise UnexpectedMessageError(f"received invalid JSON-RPC envelope shape: {envelope!r}")
 
-    def _handle_response(self, envelope: JsonRpcResponseEnvelope) -> None:
-        request_id = envelope.request_id
-        pending = self._pending_requests.pop(request_id, None)
-        if pending is None:
-            raise UnexpectedMessageError(
-                f"received JSON-RPC response for unknown request_id={request_id!r}"
+    async def _handle_response(self, envelope: JsonRpcResponseEnvelope) -> None:
+        try:
+            await self._requests.resolve_response(envelope)
+        except LateResponseError as exc:
+            _LOGGER.warning(
+                "ignoring late JSON-RPC response for request_id=%r method=%s release_reason=%s",
+                exc.request_id,
+                exc.method,
+                exc.release_reason,
             )
-
-        future = pending.future
-        if future.done():
-            return
-
-        if isinstance(envelope, JsonRpcErrorResponse):
-            error_payload = envelope.error
-            future.set_exception(
-                map_jsonrpc_error(
-                    error_payload.code,
-                    error_payload.message,
-                    data=error_payload.data if error_payload.has_data else None,
-                    method=pending.method,
-                    request_id=request_id,
-                )
-            )
-            return
-
-        if not isinstance(envelope, JsonRpcSuccessResponse):
-            raise UnexpectedMessageError(
-                f"received non-response envelope while handling request_id={request_id!r}"
-            )
-        future.set_result(envelope.result)
 
     async def _await_request_result(
         self,
@@ -241,18 +213,19 @@ class JsonRpcConnection:
                 return await asyncio.shield(future)
             timeout_seconds = timeout
             return await asyncio.wait_for(asyncio.shield(future), timeout=timeout_seconds)
+        except asyncio.CancelledError:
+            await self._requests.cancel_request(request_id, reason="cancelled")
+            raise
         except TimeoutError as exc:
+            released = await self._requests.cancel_request(request_id, reason="timed_out")
+            if not released and future.done():
+                return future.result()
             assert timeout is not None
             raise RequestTimeoutError(
                 method=method,
                 timeout_seconds=timeout,
                 request_id=request_id,
             ) from exc
-
-    async def _next_request_id(self) -> int:
-        async with self._request_id_lock:
-            self._request_id += 1
-            return self._request_id
 
     async def _next_stream_item(
         self,
@@ -297,22 +270,10 @@ class JsonRpcConnection:
                 return
             self._terminal_error = exc
             self._close_requested = True
-            self._release_pending_requests(exc)
+            await self._requests.fail_all(exc, reason="failed")
             self._closed_event.set()
 
         await self.transport.close()
-
-    def _release_pending_requests(self, exc: BaseException) -> None:
-        pending_requests = tuple(self._pending_requests.values())
-        self._pending_requests.clear()
-        for pending in pending_requests:
-            if not pending.future.done():
-                pending.future.set_exception(exc)
-
-    def _drop_pending_request(self, request_id: JsonRpcId) -> None:
-        pending = self._pending_requests.pop(request_id, None)
-        if pending is not None and not pending.future.done():
-            pending.future.cancel()
 
     def _raise_if_closed(self) -> None:
         error = self._terminal_error

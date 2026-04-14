@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 import textwrap
 from collections.abc import AsyncIterator
@@ -11,14 +12,17 @@ import pytest
 from codex_agent_sdk import (
     AppServerClient,
     AppServerConfig,
+    DuplicateResponseError,
     RequestTimeoutError,
     StartupTimeoutError,
     TransportClosedError,
+    UnknownResponseIdError,
 )
 from codex_agent_sdk.rpc import JsonRpcNotification
 from codex_agent_sdk.testing import (
     FakeAppServerScript,
     close_connection,
+    emit_raw,
     expect_notification,
     expect_request,
     send_response,
@@ -98,6 +102,48 @@ async def test_request_timeout_is_local_and_connection_remains_usable(tmp_path: 
 
 
 @pytest.mark.asyncio
+async def test_late_response_after_timeout_is_logged_and_connection_stays_usable(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="codex_agent_sdk.rpc.connection")
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request("thread/start", save_as="thread_start", params={"ephemeral": True}),
+        sleep_action(120),
+        send_response(request_ref="thread_start", result={"threadId": "thread_slow"}),
+        expect_request(
+            "thread/resume",
+            save_as="thread_resume",
+            params={"threadId": "thread_slow"},
+        ),
+        send_response(
+            request_ref="thread_resume",
+            result={"threadId": "thread_slow", "status": "resumed"},
+        ),
+    )
+    launcher = _write_fake_codex_launcher(tmp_path, script, stem="late_response_launcher.py")
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+
+        with pytest.raises(RequestTimeoutError):
+            await client.request("thread/start", {"ephemeral": True}, timeout=0.05)
+
+        await asyncio.sleep(0.15)
+        resumed = await client.request(
+            "thread/resume",
+            {"threadId": "thread_slow"},
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+    assert resumed == {"threadId": "thread_slow", "status": "resumed"}
+    assert "ignoring late JSON-RPC response" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_unexpected_eof_releases_pending_request_waiter(tmp_path: Path) -> None:
     script = FakeAppServerScript.from_actions(
         expect_request("initialize", save_as="initialize"),
@@ -144,6 +190,97 @@ async def test_explicit_close_releases_pending_request_waiter(tmp_path: Path) ->
         await client.close()
 
     assert "closed before request completion" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_multiple_requests_can_be_outstanding_and_resolve_out_of_order(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request("thread/start", save_as="thread_start", params={"ephemeral": True}),
+        expect_request(
+            "thread/resume",
+            save_as="thread_resume",
+            params={"threadId": "thread_existing"},
+        ),
+        send_response(
+            request_ref="thread_resume",
+            result={"threadId": "thread_existing", "status": "resumed"},
+        ),
+        send_response(
+            request_ref="thread_start",
+            result={"threadId": "thread_new", "status": "started"},
+        ),
+    )
+    launcher = _write_fake_codex_launcher(tmp_path, script, stem="out_of_order_launcher.py")
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        start_task = asyncio.create_task(client.request("thread/start", {"ephemeral": True}))
+        await asyncio.sleep(0)
+        resume_task = asyncio.create_task(
+            client.request("thread/resume", {"threadId": "thread_existing"})
+        )
+
+        start_result, resume_result = await asyncio.gather(start_task, resume_task)
+
+    assert start_result == {"threadId": "thread_new", "status": "started"}
+    assert resume_result == {"threadId": "thread_existing", "status": "resumed"}
+
+
+@pytest.mark.asyncio
+async def test_unknown_response_id_fails_connection(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        emit_raw('{"id":"req-999","result":{"ok":true}}'),
+        sleep_action(50),
+    )
+    launcher = _write_fake_codex_launcher(tmp_path, script, stem="unknown_response_launcher.py")
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        await asyncio.sleep(0.05)
+
+        with pytest.raises(UnknownResponseIdError) as exc_info:
+            await client.request("thread/start", {"ephemeral": True})
+
+    assert exc_info.value.request_id == "req-999"
+
+
+@pytest.mark.asyncio
+async def test_duplicate_response_id_fails_connection(tmp_path: Path) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request("thread/start", save_as="thread_start", params={"ephemeral": True}),
+        send_response(
+            request_ref="thread_start",
+            result={"threadId": "thread_new", "status": "started"},
+        ),
+        send_response(
+            request_ref="thread_start",
+            result={"threadId": "thread_new", "status": "started"},
+        ),
+        sleep_action(50),
+    )
+    launcher = _write_fake_codex_launcher(tmp_path, script, stem="duplicate_response_launcher.py")
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+        started = await client.request("thread/start", {"ephemeral": True})
+        await asyncio.sleep(0.05)
+
+        with pytest.raises(DuplicateResponseError) as exc_info:
+            await client.request("thread/resume", {"threadId": "thread_new"})
+
+    assert started == {"threadId": "thread_new", "status": "started"}
+    assert exc_info.value.method == "thread/start"
 
 
 @pytest.mark.asyncio

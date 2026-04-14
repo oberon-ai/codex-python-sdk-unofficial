@@ -8,13 +8,17 @@ from codex_agent_sdk import (
     ApprovalRequestExpiredError,
     CodexNotFoundError,
     CodexTimeoutError,
+    DuplicateRequestIdError,
+    DuplicateResponseError,
     JsonRpcInternalError,
     JsonRpcInvalidParamsError,
     JsonRpcInvalidRequestError,
     JsonRpcMethodNotFoundError,
     JsonRpcParseError,
     JsonRpcServerError,
+    LateResponseError,
     NotInitializedError,
+    RequestCorrelationError,
     RequestTimeoutError,
     ResponseValidationError,
     RetryableOverloadError,
@@ -24,6 +28,7 @@ from codex_agent_sdk import (
     StartupError,
     StartupTimeoutError,
     TransportWriteError,
+    UnknownResponseIdError,
     is_retryable_error,
     map_jsonrpc_error,
 )
@@ -142,6 +147,29 @@ class ExceptionStructureTests(unittest.TestCase):
         self.assertEqual(error.stderr_tail, "transport stderr")
         self.assertIn("exit_code=13", str(error))
         self.assertIn("transport stderr", str(error))
+
+    def test_request_correlation_errors_preserve_request_context(self) -> None:
+        duplicate_request = DuplicateRequestIdError("req-1", method="thread/start")
+        unknown_response = UnknownResponseIdError("req-missing")
+        duplicate_response = DuplicateResponseError("req-2", method="thread/resume")
+        late_response = LateResponseError(
+            "req-3",
+            release_reason="timed_out",
+            method="thread/start",
+        )
+
+        for error in (
+            duplicate_request,
+            unknown_response,
+            duplicate_response,
+            late_response,
+        ):
+            with self.subTest(error=error.__class__.__name__):
+                self.assertIsInstance(error, RequestCorrelationError)
+                self.assertIn("req-", str(error))
+
+        self.assertEqual(late_response.release_reason, "timed_out")
+        self.assertEqual(late_response.method, "thread/start")
 
 
 if __name__ == "__main__":
