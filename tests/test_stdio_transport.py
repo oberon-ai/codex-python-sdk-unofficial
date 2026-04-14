@@ -12,6 +12,7 @@ import pytest
 from codex_agent_sdk import (
     CodexNotFoundError,
     MessageDecodeError,
+    ProcessExitError,
     StartupError,
     StartupTimeoutError,
     TransportClosedError,
@@ -84,6 +85,7 @@ async def test_start_launches_process_with_cwd_env_and_metadata(tmp_path: Path) 
         assert info.cwd == str(workdir)
         assert info.pid is not None
         assert info.returncode is None
+        assert info.stderr_tail is None
         assert transport.stderr_tail is None
 
         stdout = transport.stdout
@@ -311,6 +313,47 @@ async def test_read_stdout_envelope_returns_none_on_clean_eof_between_frames(
 
 
 @pytest.mark.asyncio
+async def test_read_stdout_envelope_raises_process_exit_error_after_unexpected_exit(
+    tmp_path: Path,
+) -> None:
+    script = _write_executable_script(
+        tmp_path / "unexpected_exit_codex.py",
+        """
+        import json
+        import sys
+        import time
+
+        print(json.dumps({"id": 7, "result": {"ok": True}}), flush=True)
+        sys.stderr.write("unexpected exit after response\\n")
+        sys.stderr.flush()
+        time.sleep(0.3)
+        raise SystemExit(23)
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script)))
+
+    async with transport:
+        envelope = await asyncio.wait_for(
+            transport.read_stdout_envelope(),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+        with pytest.raises(ProcessExitError) as exc_info:
+            await asyncio.wait_for(
+                transport.read_stdout_envelope(),
+                timeout=IO_TIMEOUT_SECONDS,
+            )
+
+    error = exc_info.value
+    assert envelope == {"id": 7, "result": {"ok": True}}
+    assert error.exit_code == 23
+    assert error.stderr_tail is not None
+    assert "unexpected exit after response" in error.stderr_tail
+    assert transport.process_exit_error is error
+    assert transport.info.returncode == 23
+
+
+@pytest.mark.asyncio
 async def test_read_stdout_line_raises_transport_closed_for_midframe_eof(tmp_path: Path) -> None:
     script = _write_executable_script(
         tmp_path / "partial_eof_codex.py",
@@ -532,14 +575,176 @@ async def test_write_stdin_envelope_raises_after_process_exit(tmp_path: Path) ->
         assert process is not None
         await asyncio.wait_for(process.wait(), timeout=IO_TIMEOUT_SECONDS)
 
-        with pytest.raises(TransportWriteError) as exc_info:
+        with pytest.raises(ProcessExitError) as exc_info:
             await transport.write_stdin_envelope({"id": 1, "method": "thread/start"})
 
     error = exc_info.value
     assert error.exit_code == 9
     assert error.stderr_tail is not None
     assert "writer target exited" in error.stderr_tail
-    assert "after process exit" in str(error)
+    assert transport.process_exit_error is error
+
+
+@pytest.mark.asyncio
+async def test_close_waits_for_clean_process_exit_without_escalation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_executable_script(
+        tmp_path / "clean_shutdown_codex.py",
+        """
+        import sys
+
+        sys.stdin.read()
+        sys.stderr.write("graceful shutdown observed\\n")
+        sys.stderr.flush()
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script), shutdown_timeout=0.5))
+
+    await transport.start()
+    process = transport.process
+    assert process is not None
+
+    terminate_calls = 0
+    kill_calls = 0
+    process_type = type(process)
+    original_terminate = process_type.terminate
+    original_kill = process_type.kill
+
+    def recording_terminate(self: Any) -> None:
+        nonlocal terminate_calls
+        if self is process:
+            terminate_calls += 1
+        original_terminate(self)
+
+    def recording_kill(self: Any) -> None:
+        nonlocal kill_calls
+        if self is process:
+            kill_calls += 1
+        original_kill(self)
+
+    monkeypatch.setattr(process_type, "terminate", recording_terminate)
+    monkeypatch.setattr(process_type, "kill", recording_kill)
+
+    await transport.close()
+
+    assert terminate_calls == 0
+    assert kill_calls == 0
+    assert transport.process is None
+    assert transport.returncode == 0
+    assert transport.process_exit_error is None
+    assert transport.info.stderr_tail is not None
+    assert "graceful shutdown observed" in transport.info.stderr_tail
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="SIGTERM handling in this escalation test is POSIX-specific",
+)
+async def test_close_escalates_to_kill_when_process_ignores_stdin_eof_and_sigterm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    script = _write_executable_script(
+        tmp_path / "hung_shutdown_codex.py",
+        """
+        import signal
+        import sys
+        import time
+
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        sys.stdin.read()
+        sys.stderr.write("ignoring shutdown\\n")
+        sys.stderr.flush()
+        while True:
+            time.sleep(0.1)
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script), shutdown_timeout=0.6))
+
+    await transport.start()
+    process = transport.process
+    assert process is not None
+
+    terminate_calls = 0
+    kill_calls = 0
+    process_type = type(process)
+    original_terminate = process_type.terminate
+    original_kill = process_type.kill
+
+    def recording_terminate(self: Any) -> None:
+        nonlocal terminate_calls
+        if self is process:
+            terminate_calls += 1
+        original_terminate(self)
+
+    def recording_kill(self: Any) -> None:
+        nonlocal kill_calls
+        if self is process:
+            kill_calls += 1
+        original_kill(self)
+
+    monkeypatch.setattr(process_type, "terminate", recording_terminate)
+    monkeypatch.setattr(process_type, "kill", recording_kill)
+
+    await transport.close()
+
+    assert terminate_calls == 1
+    assert kill_calls == 1
+    assert transport.process is None
+    assert transport.returncode is not None
+    assert transport.info.stderr_tail is not None
+    assert "ignoring shutdown" in transport.info.stderr_tail
+
+
+@pytest.mark.asyncio
+async def test_close_records_nonzero_exit_observed_during_shutdown(tmp_path: Path) -> None:
+    script = _write_executable_script(
+        tmp_path / "shutdown_failure_codex.py",
+        """
+        import sys
+
+        sys.stdin.read()
+        sys.stderr.write("shutdown failure\\n")
+        sys.stderr.flush()
+        raise SystemExit(5)
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script), shutdown_timeout=0.5))
+
+    await transport.start()
+    await transport.close()
+
+    error = transport.process_exit_error
+    assert error is not None
+    assert error.exit_code == 5
+    assert error.stderr_tail is not None
+    assert "shutdown failure" in error.stderr_tail
+    assert transport.info.returncode == 5
+    assert transport.info.stderr_tail is not None
+    assert "shutdown failure" in transport.info.stderr_tail
+
+
+@pytest.mark.asyncio
+async def test_close_is_idempotent_for_concurrent_and_repeated_callers(tmp_path: Path) -> None:
+    script = _write_executable_script(
+        tmp_path / "idempotent_close_codex.py",
+        """
+        import sys
+
+        sys.stdin.read()
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script), shutdown_timeout=0.5))
+
+    await transport.start()
+    await asyncio.gather(transport.close(), transport.close())
+    await transport.close()
+
+    assert transport.process is None
+    assert transport.returncode == 0
 
 
 @pytest.mark.asyncio

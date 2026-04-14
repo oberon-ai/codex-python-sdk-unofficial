@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from ..errors import (
     CodexNotFoundError,
     MessageDecodeError,
+    ProcessExitError,
     ShutdownTimeoutError,
     StartupError,
     StartupTimeoutError,
@@ -40,6 +41,7 @@ class StdioTransportInfo:
     cwd: str | None
     pid: int | None
     returncode: int | None
+    stderr_tail: str | None
 
 
 class StdioTransport:
@@ -66,12 +68,16 @@ class StdioTransport:
         self._process: Process | None = None
         self._last_pid: int | None = None
         self._last_returncode: int | None = None
+        self._process_exit_error: ProcessExitError | None = None
         self._stdout_buffer = bytearray()
         self._stdout_eof = False
         self._stdout_max_frame_bytes = stdout_max_frame_bytes
         self._stdout_read_chunk_bytes = stdout_read_chunk_bytes
         self._stdout_read_lock = asyncio.Lock()
         self._stdin_write_lock = asyncio.Lock()
+        self._close_lock = asyncio.Lock()
+        self._close_task: asyncio.Task[None] | None = None
+        self._close_requested = False
 
     async def __aenter__(self) -> StdioTransport:
         await self.start()
@@ -156,6 +162,7 @@ class StdioTransport:
             cwd=self.cwd,
             pid=self.pid,
             returncode=self.returncode,
+            stderr_tail=self.stderr_tail,
         )
 
     @property
@@ -169,6 +176,24 @@ class StdioTransport:
         return "\n".join(self._stderr_lines)
 
     @property
+    def process_exit_error(self) -> ProcessExitError | None:
+        error = self._process_exit_error
+        if error is not None:
+            return error
+
+        process = self._process
+        if process is None or self._close_requested or process.returncode in (None, 0):
+            return None
+
+        error = ProcessExitError(
+            exit_code=process.returncode,
+            stderr_tail=self.stderr_tail,
+        )
+        self._process_exit_error = error
+        self._last_returncode = process.returncode
+        return error
+
+    @property
     def is_running(self) -> bool:
         process = self._process
         return process is not None and process.returncode is None
@@ -176,14 +201,20 @@ class StdioTransport:
     async def start(self) -> StdioTransport:
         """Launch the subprocess and retain ownership of its stdio pipes."""
 
+        close_task = self._close_task
+        if close_task is not None:
+            await asyncio.shield(close_task)
+
         if self.is_running:
             return self
 
         command = self.command
         env = self.environment
         cwd = self.cwd
+        self._close_requested = False
         self._stderr_lines.clear()
         self._last_returncode = None
+        self._process_exit_error = None
         self._stdout_buffer.clear()
         self._stdout_eof = False
 
@@ -273,7 +304,7 @@ class StdioTransport:
         frame = _encode_stdin_frame(envelope)
 
         async with self._stdin_write_lock:
-            stdin = self._require_stdin_for_write_locked()
+            stdin = await self._require_stdin_for_write_locked()
 
             try:
                 stdin.write(frame)
@@ -294,40 +325,30 @@ class StdioTransport:
     async def close(self) -> None:
         """Terminate the subprocess and wait for local cleanup."""
 
-        process = self._process
-        stderr_task = self._stderr_task
-        self._process = None
-        self._stderr_task = None
+        async with self._close_lock:
+            close_task = self._close_task
+            if close_task is None:
+                process = self._process
+                stderr_task = self._stderr_task
 
-        if process is None:
-            if stderr_task is not None:
-                await self._await_stderr_task(stderr_task)
-            return
+                if process is None and stderr_task is None:
+                    return
 
-        stdin = process.stdin
-        if stdin is not None and not stdin.is_closing():
-            stdin.close()
-            with suppress(BrokenPipeError, ConnectionResetError):
-                await stdin.wait_closed()
+                self._close_requested = True
+                close_task = asyncio.create_task(
+                    self._close_impl(process=process, stderr_task=stderr_task),
+                    name="codex-agent-sdk.transport-close",
+                )
+                self._close_task = close_task
 
-        if process.returncode is None:
-            with suppress(ProcessLookupError):
-                process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=self.config.shutdown_timeout)
-            except TimeoutError:
-                process.kill()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=self.config.shutdown_timeout)
-                except TimeoutError as inner_exc:
-                    await self._await_stderr_task(stderr_task)
-                    raise ShutdownTimeoutError(
-                        timeout_seconds=self.config.shutdown_timeout,
-                        stderr_tail=self.stderr_tail,
-                    ) from inner_exc
-
-        self._last_returncode = process.returncode
-        await self._await_stderr_task(stderr_task)
+        assert close_task is not None
+        try:
+            await asyncio.shield(close_task)
+        finally:
+            if close_task.done():
+                async with self._close_lock:
+                    if self._close_task is close_task:
+                        self._close_task = None
 
     async def _probe_for_early_exit(
         self,
@@ -367,6 +388,7 @@ class StdioTransport:
 
         self._process = None
         self._stderr_task = None
+        self._close_requested = False
 
         if process is not None:
             stdin = process.stdin
@@ -381,9 +403,9 @@ class StdioTransport:
 
         await self._await_stderr_task(stderr_task)
 
-    def _require_stdin_for_write_locked(self) -> asyncio.StreamWriter:
+    async def _require_stdin_for_write_locked(self) -> asyncio.StreamWriter:
         process = self._process
-        if process is None:
+        if process is None or self._close_requested:
             raise TransportWriteError(
                 "cannot write to app-server stdin after transport close",
                 stderr_tail=self.stderr_tail,
@@ -391,6 +413,8 @@ class StdioTransport:
             )
         if process.returncode is not None:
             self._last_returncode = process.returncode
+            if process.returncode != 0:
+                raise await self._build_process_exit_error(process.returncode)
             raise TransportWriteError(
                 "cannot write to app-server stdin after process exit",
                 stderr_tail=self.stderr_tail,
@@ -409,6 +433,87 @@ class StdioTransport:
     async def _close_after_write_failure(self) -> None:
         with suppress(TransportError, OSError, RuntimeError):
             await self.close()
+
+    async def _close_impl(
+        self,
+        *,
+        process: Process | None,
+        stderr_task: asyncio.Task[None] | None,
+    ) -> None:
+        if process is None:
+            if stderr_task is not None:
+                await self._await_stderr_task(stderr_task)
+                if self._stderr_task is stderr_task:
+                    self._stderr_task = None
+            return
+
+        escalated = False
+        shutdown_timeout = self.config.shutdown_timeout
+
+        try:
+            await self._close_stdin(process)
+
+            if not await self._wait_for_process_exit(process, timeout=shutdown_timeout):
+                escalated = True
+                with suppress(ProcessLookupError):
+                    process.terminate()
+
+                if not await self._wait_for_process_exit(process, timeout=shutdown_timeout):
+                    with suppress(ProcessLookupError):
+                        process.kill()
+
+                    if not await self._wait_for_process_exit(process, timeout=shutdown_timeout):
+                        raise ShutdownTimeoutError(
+                            timeout_seconds=shutdown_timeout,
+                            stderr_tail=self.stderr_tail,
+                        )
+
+            self._last_returncode = process.returncode
+            await self._await_stderr_task(stderr_task)
+
+            if process.returncode not in (None, 0) and not escalated:
+                await self._build_process_exit_error(process.returncode)
+        finally:
+            if process.returncode is not None:
+                self._last_returncode = process.returncode
+            if process.returncode is not None and self._process is process:
+                self._process = None
+            if process.returncode is not None and self._stderr_task is stderr_task:
+                self._stderr_task = None
+
+    async def _close_stdin(self, process: Process) -> None:
+        stdin = process.stdin
+        if stdin is None or stdin.is_closing():
+            return
+
+        stdin.close()
+        with suppress(BrokenPipeError, ConnectionResetError, RuntimeError):
+            await stdin.wait_closed()
+
+    async def _wait_for_process_exit(self, process: Process, *, timeout: float) -> bool:
+        if process.returncode is not None:
+            self._last_returncode = process.returncode
+            return True
+
+        try:
+            await asyncio.wait_for(process.wait(), timeout=timeout)
+        except TimeoutError:
+            return False
+
+        self._last_returncode = process.returncode
+        return True
+
+    async def _build_process_exit_error(self, exit_code: int | None) -> ProcessExitError:
+        await self._await_stderr_task(self._stderr_task)
+
+        error = self._process_exit_error
+        if error is None:
+            error = ProcessExitError(
+                exit_code=exit_code,
+                stderr_tail=self.stderr_tail,
+            )
+            self._process_exit_error = error
+        return error
 
     async def _read_stdout_frame_locked(self) -> bytes | None:
         stdout = self.stdout
@@ -433,6 +538,9 @@ class StdioTransport:
                         "app-server transport closed with a partial JSONL frame on stdout",
                         stderr_tail=self.stderr_tail,
                     )
+                process_exit_error = await self._get_process_exit_error_for_eof()
+                if process_exit_error is not None:
+                    raise process_exit_error
                 return None
 
             chunk = await stdout.read(self._stdout_read_chunk_bytes)
@@ -443,15 +551,15 @@ class StdioTransport:
             self._stdout_buffer.extend(chunk)
             if len(self._stdout_buffer) > self._stdout_max_frame_bytes:
                 preview = _decode_frame_preview(bytes(self._stdout_buffer))
-                error = ValueError(
+                size_error = ValueError(
                     "app-server JSONL frame exceeded "
                     f"{self._stdout_max_frame_bytes} bytes without a newline"
                 )
                 raise MessageDecodeError(
                     preview,
-                    original_error=error,
+                    original_error=size_error,
                     stderr_tail=self.stderr_tail,
-                ) from error
+                ) from size_error
 
     async def _drain_stderr(self) -> None:
         process = self._process
@@ -469,6 +577,16 @@ class StdioTransport:
             return
         with suppress(asyncio.CancelledError):
             await task
+
+    async def _get_process_exit_error_for_eof(self) -> ProcessExitError | None:
+        if self._close_requested:
+            return self._process_exit_error
+
+        process = self._process
+        if process is None or process.returncode in (None, 0):
+            return self._process_exit_error
+
+        return await self._build_process_exit_error(process.returncode)
 
 
 def _decode_stdout_frame(frame: bytes, *, stderr_tail: str | None) -> str:
