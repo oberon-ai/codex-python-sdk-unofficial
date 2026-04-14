@@ -187,7 +187,7 @@ Contract notes:
 ```python
 async def query(
     *,
-    prompt: str | list[InputItem],
+    prompt: str | InputItem | Sequence[InputItem],
     options: CodexOptions | None = None,
     app_server: AppServerConfig | None = None,
     output_schema: dict[str, object] | None = None,
@@ -201,10 +201,11 @@ async def query(
 `query()` is the smallest public entry point:
 
 - it creates a temporary app-server connection
-- it opens a fresh thread for the helper's own use
+- it opens a fresh ephemeral thread for the helper's own use
 - it starts exactly one turn
 - it yields `TurnEvent` values until the turn reaches a terminal state
 - it closes the subprocess connection before returning
+- if iteration stops early or the consumer task is cancelled, generator cleanup closes the subprocess connection before returning control
 
 `query()` is for:
 
@@ -224,7 +225,9 @@ async def query(
 ### Input rules
 
 - If `prompt` is a string, the helper converts it to a single text input item.
-- If `prompt` is a list of `InputItem`, the helper sends them as-is so callers can pass images, skills, or app mentions explicitly.
+- If `prompt` is one structured `InputItem`, the helper wraps it as the turn's single input item.
+- If `prompt` is a sequence of `InputItem`, the helper sends them as-is so callers can pass images, skills, or app mentions explicitly.
+- The helper should subscribe to thread-scoped notifications and server requests before `turn/start` so immediate `turn/started`, item-delta, and approval events are not lost behind the `turn/start` response race.
 - `output_schema` constrains only the current turn and is not persisted into future turns because `query()` has no future turns.
 
 ### Approval behavior

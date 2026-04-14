@@ -41,6 +41,20 @@ The reusable fake app-server harness and JSONL script format live in
 [`codex_agent_sdk.testing.fake_app_server`](src/codex_agent_sdk/testing/fake_app_server.py)
 and [tests/fixtures/fake_server_scripts/README.md](tests/fixtures/fake_server_scripts/README.md).
 
+## One-shot query
+
+The fastest path through the SDK is the top-level `query()` helper:
+
+```python
+from codex_agent_sdk import CodexOptions, query
+
+async for event in query(
+    prompt="Audit this repo and summarize the highest-risk issues.",
+    options=CodexOptions(model="gpt-5.4", cwd="."),
+):
+    print(event)
+```
+
 ## Development
 
 Install the project in editable mode with dev tooling:

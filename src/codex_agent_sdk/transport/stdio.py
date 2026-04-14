@@ -429,7 +429,13 @@ class StdioTransport:
                 wait_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await wait_task
-                return
+                # Give the event loop one more scheduling turn so a just-exited
+                # child can publish its return code before we declare startup
+                # healthy. This keeps the fast path cheap without depending on a
+                # razor-thin timeout boundary.
+                await asyncio.sleep(0)
+                if process.returncode is None:
+                    return
 
         await self._await_stderr_task(self._stderr_task)
         raise StartupError(

@@ -1066,19 +1066,16 @@ async def _read_next_server_request(
     return await anext(requests)
 
 
-async def _iter_turn_events(
+async def _stream_turn_events(
     client: AppServerClient,
     *,
-    thread_id: str,
     turn_id: str,
+    notifications: AsyncIterator[JsonRpcNotification],
+    notification_subscription: JsonRpcNotificationSubscription,
+    server_requests: AsyncIterator[JsonRpcRequest],
+    server_request_subscription: JsonRpcServerRequestSubscription,
+    close_message: str,
 ) -> AsyncIterator[TurnEvent]:
-    subscription = client.subscribe_thread_notifications(thread_id)
-    notifications = subscription.iter_notifications()
-    server_request_subscription = client.subscribe_turn_server_requests(
-        turn_id,
-        thread_id=thread_id,
-    )
-    server_requests = server_request_subscription.iter_requests()
     adapter_state = TurnEventAdapterState()
     stream_completed = False
     notification_task = asyncio.create_task(
@@ -1104,8 +1101,7 @@ async def _iter_turn_events(
                     if stream_completed:
                         return
                     raise TransportClosedError(
-                        "app-server connection closed before turn stream completed "
-                        f"for turn_id={turn_id!r}",
+                        close_message,
                         stderr_tail=client._connection.transport.stderr_tail,
                     ) from None
 
@@ -1130,8 +1126,7 @@ async def _iter_turn_events(
                     if stream_completed:
                         return
                     raise TransportClosedError(
-                        "app-server connection closed before turn stream completed "
-                        f"for turn_id={turn_id!r}",
+                        close_message,
                         stderr_tail=client._connection.transport.stderr_tail,
                     ) from None
 
@@ -1158,8 +1153,35 @@ async def _iter_turn_events(
             server_request_task,
             return_exceptions=True,
         )
-        subscription.close()
+        notification_subscription.close()
         server_request_subscription.close()
+
+
+async def _iter_turn_events(
+    client: AppServerClient,
+    *,
+    thread_id: str,
+    turn_id: str,
+) -> AsyncIterator[TurnEvent]:
+    notification_subscription = client.subscribe_thread_notifications(thread_id)
+    notifications = notification_subscription.iter_notifications()
+    server_request_subscription = client.subscribe_turn_server_requests(
+        turn_id,
+        thread_id=thread_id,
+    )
+    server_requests = server_request_subscription.iter_requests()
+    async for event in _stream_turn_events(
+        client,
+        turn_id=turn_id,
+        notifications=notifications,
+        notification_subscription=notification_subscription,
+        server_requests=server_requests,
+        server_request_subscription=server_request_subscription,
+        close_message=(
+            f"app-server connection closed before turn stream completed for turn_id={turn_id!r}"
+        ),
+    ):
+        yield event
 
 
 async def _iter_approval_requests(
