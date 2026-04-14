@@ -49,6 +49,30 @@ script fails fast rather than silently refreshing the snapshots from the wrong
 runtime version. The rationale and workflow details live in
 `docs/schema-vendoring.md`.
 
+## Generated Pydantic wire models
+
+The first generated Python wire-model layer is checked in at:
+
+- `src/codex_agent_sdk/generated/stable.py`
+
+It is generated from the pinned stable schema snapshot, not directly from a
+developer machine's live `codex` output.
+
+Verify that the checked-in generated models are current:
+
+```bash
+python scripts/generate_protocol_models.py --check
+```
+
+Refresh them intentionally:
+
+```bash
+python scripts/generate_protocol_models.py
+```
+
+The script fails fast if the installed `datamodel-code-generator` version does
+not match the repo pin in `requirements/codegen.txt`.
+
 ## Quality gates
 
 Run these commands from the repository root:

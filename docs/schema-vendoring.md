@@ -115,3 +115,7 @@ Keep the boundary explicit:
 - vendored JSON snapshots live under `tests/fixtures/schema_snapshots/`
 - generated Python modules live under `src/codex_agent_sdk/generated/`
 - handwritten adapters stay in `src/codex_agent_sdk/protocol/`
+
+The current stable Pydantic codegen step is implemented by
+`scripts/generate_protocol_models.py` and documented in
+`docs/protocol-model-codegen.md`.

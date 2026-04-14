@@ -28,6 +28,9 @@ The dependency rationale and pinned repo toolchain live in [docs/dependency-poli
 The pinned schema snapshots, refresh workflow, and stable-versus-experimental
 policy live in [docs/schema-vendoring.md](docs/schema-vendoring.md).
 
+The stable Pydantic wire-model generation workflow lives in
+[docs/protocol-model-codegen.md](docs/protocol-model-codegen.md).
+
 Protocol fixture, schema snapshot, fake-server script, and golden transcript
 conventions live in [tests/fixtures/README.md](tests/fixtures/README.md).
 

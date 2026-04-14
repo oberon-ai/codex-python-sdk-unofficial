@@ -14,3 +14,7 @@ Current maintenance entrypoint:
   - Regenerates the pinned stable and experimental schema snapshots under
     `tests/fixtures/schema_snapshots/` and updates
     `tests/fixtures/schema_snapshots/vendor_manifest.json`.
+- `generate_protocol_models.py`
+  - Regenerates or verifies the checked-in stable Pydantic wire models at
+    `src/codex_agent_sdk/generated/stable.py` from the pinned stable schema
+    snapshot.
