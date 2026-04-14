@@ -40,7 +40,11 @@ These names should be importable from `codex_agent_sdk`:
 | `OverloadRetryPolicy` | dataclass | Opt-in backoff policy for replaying overload-safe operations. |
 | `TurnEvent` | type alias | Union of typed high-level events plus raw passthrough wrappers. |
 | `ApprovalRequest` | dataclass | Typed approval request surfaced from server-initiated JSON-RPC requests. |
-| `ApprovalDecision` | type alias / dataclass union | Structured approval response values sent back to the app-server. |
+| `CommandApprovalRequest` | dataclass | Command-execution approval request with normalized command and permission details. |
+| `FileChangeApprovalRequest` | dataclass | File-change approval request with best-effort normalized diff details when present. |
+| `PermissionsApprovalRequest` | dataclass | Permission approval request with normalized requested-permissions details. |
+| `ApprovalDecision` | dataclass | Structured approval response values sent back to the app-server. |
+| `adapt_approval_request()` | helper function | Turn one raw or typed server request into a typed high-level approval request when applicable. |
 | `retry_on_overload()` | async helper | Retry a caller-supplied async operation after transient overload using exponential backoff and jitter. |
 | `query()` | async generator function | One-shot convenience helper that creates a temporary client, runs exactly one turn, streams events, and closes. |
 
@@ -182,6 +186,17 @@ async def query(
 - If `approval_handler` is omitted, the event stream includes `ApprovalRequestedEvent`.
 - `ApprovalRequestedEvent` must expose an async `respond(decision)` helper so callers can keep approval logic inline while iterating the stream.
 - If the caller never responds, the turn remains blocked in a visible way.
+- `ApprovalRequestedEvent.request` should be one of:
+  - `CommandApprovalRequest`
+  - `FileChangeApprovalRequest`
+  - `PermissionsApprovalRequest`
+- Each approval request keeps both:
+  - normalized fields for application code such as `thread_id`, `turn_id`, `item_id`, `reason`, command details, diff details, or requested permissions
+  - the original wire request via `request_envelope` plus raw `payload`
+- `ApprovalDecision` should be able to represent:
+  - ordinary `{ "decision": ... }` approval replies for command and file-change approvals
+  - `{ "permissions": ..., "scope": ... }` grant replies for `item/permissions/requestApproval`
+- Advanced callers handling raw `iter_server_requests()` output should be able to call `adapt_approval_request(...)` directly instead of unpacking approval payload dictionaries by hand.
 
 ## `CodexSDKClient`: Stateful Thread Client
 

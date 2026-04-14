@@ -16,7 +16,19 @@ Import policy:
   and ``testing`` stay importable but are not part of the curated root surface
 """
 
-from .approvals import ApprovalDecision, ApprovalRequest
+from .approvals import (
+    ApprovalCommandAction,
+    ApprovalDecision,
+    ApprovalFileChange,
+    ApprovalFileSystemPermissions,
+    ApprovalPermissions,
+    ApprovalRequest,
+    CommandApprovalRequest,
+    FileChangeApprovalRequest,
+    PermissionGrantScope,
+    PermissionsApprovalRequest,
+    adapt_approval_request,
+)
 from .client import AppServerClient, CodexSDKClient
 from .errors import (
     AlreadyInitializedError,
@@ -108,12 +120,17 @@ __all__ = [
     "AppServerClient",
     "AppServerConfig",
     "AgentTextDeltaEvent",
+    "ApprovalCommandAction",
     "AlreadyInitializedError",
     "ApprovalCallbackError",
     "ApprovalError",
+    "ApprovalFileChange",
+    "ApprovalFileSystemPermissions",
+    "ApprovalPermissions",
     "ApprovalRequestExpiredError",
     "ApprovalRequestedEvent",
     "ClientStateError",
+    "CommandApprovalRequest",
     "CodexError",
     "CodexNotFoundError",
     "CodexOptions",
@@ -143,6 +160,8 @@ __all__ = [
     "NotificationSubscriptionOverflowError",
     "NotInitializedError",
     "OverloadRetryPolicy",
+    "PermissionGrantScope",
+    "PermissionsApprovalRequest",
     "ProcessExitError",
     "ProtocolError",
     "query",
@@ -166,6 +185,7 @@ __all__ = [
     "TransportClosedError",
     "TransportError",
     "TransportWriteError",
+    "FileChangeApprovalRequest",
     "TurnCompletedEvent",
     "TurnCompletion",
     "TurnEvent",
@@ -177,6 +197,7 @@ __all__ = [
     "UnknownServerRequestIdError",
     "UnknownResponseIdError",
     "UnexpectedMessageError",
+    "adapt_approval_request",
     "is_retryable_error",
     "map_jsonrpc_error",
     "retry_on_overload",

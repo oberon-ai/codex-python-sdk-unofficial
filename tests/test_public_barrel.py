@@ -7,15 +7,23 @@ from pathlib import Path
 import codex_agent_sdk
 from codex_agent_sdk import (
     DEFAULT_OVERLOAD_RETRY_POLICY,
+    ApprovalCommandAction,
     ApprovalDecision,
+    ApprovalFileChange,
+    ApprovalFileSystemPermissions,
+    ApprovalPermissions,
     ApprovalRequest,
     ApprovalRequestedEvent,
     AppServerClient,
     AppServerConfig,
     CodexOptions,
     CodexSDKClient,
+    CommandApprovalRequest,
+    FileChangeApprovalRequest,
     InitializeResult,
     OverloadRetryPolicy,
+    PermissionGrantScope,
+    PermissionsApprovalRequest,
     TurnCompletion,
     TurnEvent,
     TurnHandle,
@@ -23,6 +31,7 @@ from codex_agent_sdk import (
     TurnOutputAggregator,
     TurnResult,
     TurnStartedEvent,
+    adapt_approval_request,
     query,
     retry_on_overload,
 )
@@ -44,15 +53,23 @@ class PublicBarrelTests(unittest.TestCase):
         expected = {
             "AppServerClient",
             "AppServerConfig",
+            "ApprovalCommandAction",
             "ApprovalDecision",
+            "ApprovalFileChange",
+            "ApprovalFileSystemPermissions",
+            "ApprovalPermissions",
             "ApprovalRequest",
             "AgentTextDeltaEvent",
             "ApprovalRequestedEvent",
+            "CommandApprovalRequest",
             "CodexOptions",
             "CodexSDKClient",
             "DEFAULT_OVERLOAD_RETRY_POLICY",
+            "FileChangeApprovalRequest",
             "InitializeResult",
             "OverloadRetryPolicy",
+            "PermissionGrantScope",
+            "PermissionsApprovalRequest",
             "query",
             "ThreadStatusChangedEvent",
             "TurnCompletedEvent",
@@ -63,6 +80,7 @@ class PublicBarrelTests(unittest.TestCase):
             "TurnOutputAggregator",
             "TurnResult",
             "TurnStartedEvent",
+            "adapt_approval_request",
             "retry_on_overload",
         }
 
@@ -72,12 +90,23 @@ class PublicBarrelTests(unittest.TestCase):
         self.assertIs(AppServerClient, client_module.AppServerClient)
         self.assertIs(AppServerConfig, options_module.AppServerConfig)
         self.assertIs(CodexSDKClient, client_module.CodexSDKClient)
+        self.assertIs(ApprovalCommandAction, approvals_module.ApprovalCommandAction)
         self.assertIs(ApprovalDecision, approvals_module.ApprovalDecision)
+        self.assertIs(ApprovalFileChange, approvals_module.ApprovalFileChange)
+        self.assertIs(
+            ApprovalFileSystemPermissions,
+            approvals_module.ApprovalFileSystemPermissions,
+        )
+        self.assertIs(ApprovalPermissions, approvals_module.ApprovalPermissions)
         self.assertIs(ApprovalRequest, approvals_module.ApprovalRequest)
+        self.assertIs(CommandApprovalRequest, approvals_module.CommandApprovalRequest)
         self.assertIs(CodexOptions, options_module.CodexOptions)
         self.assertIs(DEFAULT_OVERLOAD_RETRY_POLICY, retry_module.DEFAULT_OVERLOAD_RETRY_POLICY)
+        self.assertIs(FileChangeApprovalRequest, approvals_module.FileChangeApprovalRequest)
         self.assertIs(InitializeResult, initialize_module.InitializeResult)
         self.assertIs(OverloadRetryPolicy, retry_module.OverloadRetryPolicy)
+        self.assertIs(PermissionGrantScope, approvals_module.PermissionGrantScope)
+        self.assertIs(PermissionsApprovalRequest, approvals_module.PermissionsApprovalRequest)
         self.assertIs(TurnCompletion, results_module.TurnCompletion)
         self.assertIs(TurnHandle, results_module.TurnHandle)
         self.assertIs(TurnItemAggregation, results_module.TurnItemAggregation)
@@ -86,6 +115,7 @@ class PublicBarrelTests(unittest.TestCase):
         self.assertIs(TurnStartedEvent, events_module.TurnStartedEvent)
         self.assertIs(ApprovalRequestedEvent, events_module.ApprovalRequestedEvent)
         self.assertIs(TurnEvent, events_module.TurnEvent)
+        self.assertIs(adapt_approval_request, approvals_module.adapt_approval_request)
         self.assertIs(query, query_module.query)
         self.assertIs(retry_on_overload, retry_module.retry_on_overload)
 
