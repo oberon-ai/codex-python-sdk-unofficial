@@ -12,15 +12,20 @@ from dataclasses import dataclass
 
 from ..errors import (
     CodexNotFoundError,
+    MessageDecodeError,
     ShutdownTimeoutError,
     StartupError,
     StartupTimeoutError,
+    TransportClosedError,
 )
 from ..options import AppServerConfig
+from ..rpc import JsonRpcEnvelope, parse_jsonrpc_envelope
 
 APP_SERVER_SUBCOMMAND = "app-server"
 DEFAULT_CODEX_BIN = "codex"
 DEFAULT_STDERR_TAIL_LINES = 200
+DEFAULT_STDOUT_MAX_FRAME_BYTES = 1_048_576
+DEFAULT_STDOUT_READ_CHUNK_BYTES = 16_384
 STARTUP_EXIT_GRACE_PERIOD_SECONDS = 0.2
 STDIO_LISTEN_URI = "stdio://"
 
@@ -43,9 +48,15 @@ class StdioTransport:
         config: AppServerConfig | None = None,
         *,
         stderr_tail_lines: int = DEFAULT_STDERR_TAIL_LINES,
+        stdout_max_frame_bytes: int = DEFAULT_STDOUT_MAX_FRAME_BYTES,
+        stdout_read_chunk_bytes: int = DEFAULT_STDOUT_READ_CHUNK_BYTES,
     ) -> None:
         if stderr_tail_lines <= 0:
             raise ValueError("stderr_tail_lines must be positive")
+        if stdout_max_frame_bytes <= 0:
+            raise ValueError("stdout_max_frame_bytes must be positive")
+        if stdout_read_chunk_bytes <= 0:
+            raise ValueError("stdout_read_chunk_bytes must be positive")
 
         self.config = config or AppServerConfig()
         self._stderr_lines: deque[str] = deque(maxlen=stderr_tail_lines)
@@ -53,6 +64,11 @@ class StdioTransport:
         self._process: Process | None = None
         self._last_pid: int | None = None
         self._last_returncode: int | None = None
+        self._stdout_buffer = bytearray()
+        self._stdout_eof = False
+        self._stdout_max_frame_bytes = stdout_max_frame_bytes
+        self._stdout_read_chunk_bytes = stdout_read_chunk_bytes
+        self._stdout_read_lock = asyncio.Lock()
 
     async def __aenter__(self) -> StdioTransport:
         await self.start()
@@ -165,6 +181,8 @@ class StdioTransport:
         cwd = self.cwd
         self._stderr_lines.clear()
         self._last_returncode = None
+        self._stdout_buffer.clear()
+        self._stdout_eof = False
 
         try:
             process = await asyncio.wait_for(
@@ -223,6 +241,28 @@ class StdioTransport:
             raise
 
         return self
+
+    async def read_stdout_line(self) -> str | None:
+        """Read the next decoded JSONL frame from stdout.
+
+        Returns ``None`` only for clean EOF between frames. If stdout closes while
+        a frame is still in progress, the transport raises ``TransportClosedError``
+        so callers do not confuse protocol breakage with graceful shutdown.
+        """
+
+        async with self._stdout_read_lock:
+            frame = await self._read_stdout_frame_locked()
+            if frame is None:
+                return None
+            return _decode_stdout_frame(frame, stderr_tail=self.stderr_tail)
+
+    async def read_stdout_envelope(self) -> JsonRpcEnvelope | None:
+        """Read and parse the next raw JSON-RPC envelope from stdout."""
+
+        line = await self.read_stdout_line()
+        if line is None:
+            return None
+        return parse_jsonrpc_envelope(line, stderr_tail=self.stderr_tail)
 
     async def close(self) -> None:
         """Terminate the subprocess and wait for local cleanup."""
@@ -314,6 +354,49 @@ class StdioTransport:
 
         await self._await_stderr_task(stderr_task)
 
+    async def _read_stdout_frame_locked(self) -> bytes | None:
+        stdout = self.stdout
+        if stdout is None:
+            raise TransportClosedError(
+                "app-server stdout is not available",
+                stderr_tail=self.stderr_tail,
+            )
+
+        while True:
+            newline_index = self._stdout_buffer.find(b"\n")
+            if newline_index >= 0:
+                frame = bytes(self._stdout_buffer[:newline_index])
+                del self._stdout_buffer[: newline_index + 1]
+                if frame.endswith(b"\r"):
+                    frame = frame[:-1]
+                return frame
+
+            if self._stdout_eof:
+                if self._stdout_buffer:
+                    raise TransportClosedError(
+                        "app-server transport closed with a partial JSONL frame on stdout",
+                        stderr_tail=self.stderr_tail,
+                    )
+                return None
+
+            chunk = await stdout.read(self._stdout_read_chunk_bytes)
+            if chunk == b"":
+                self._stdout_eof = True
+                continue
+
+            self._stdout_buffer.extend(chunk)
+            if len(self._stdout_buffer) > self._stdout_max_frame_bytes:
+                preview = _decode_frame_preview(bytes(self._stdout_buffer))
+                error = ValueError(
+                    "app-server JSONL frame exceeded "
+                    f"{self._stdout_max_frame_bytes} bytes without a newline"
+                )
+                raise MessageDecodeError(
+                    preview,
+                    original_error=error,
+                    stderr_tail=self.stderr_tail,
+                ) from error
+
     async def _drain_stderr(self) -> None:
         process = self._process
         if process is None or process.stderr is None:
@@ -332,10 +415,27 @@ class StdioTransport:
             await task
 
 
+def _decode_stdout_frame(frame: bytes, *, stderr_tail: str | None) -> str:
+    try:
+        return frame.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise MessageDecodeError(
+            _decode_frame_preview(frame),
+            original_error=exc,
+            stderr_tail=stderr_tail,
+        ) from exc
+
+
+def _decode_frame_preview(frame: bytes) -> str:
+    return frame[:160].decode("utf-8", errors="replace")
+
+
 __all__ = [
     "APP_SERVER_SUBCOMMAND",
     "DEFAULT_CODEX_BIN",
     "DEFAULT_STDERR_TAIL_LINES",
+    "DEFAULT_STDOUT_MAX_FRAME_BYTES",
+    "DEFAULT_STDOUT_READ_CHUNK_BYTES",
     "STDIO_LISTEN_URI",
     "StdioTransport",
     "StdioTransportInfo",

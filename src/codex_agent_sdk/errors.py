@@ -113,11 +113,23 @@ class TransportWriteError(TransportError):
 class MessageDecodeError(TransportError):
     """Raised when a JSONL message cannot be decoded or parsed."""
 
-    def __init__(self, line: str, *, original_error: BaseException) -> None:
+    def __init__(
+        self,
+        line: str,
+        *,
+        original_error: BaseException,
+        stderr_tail: str | None = None,
+    ) -> None:
         self.line = line
         self.original_error = original_error
+        self.stderr_tail = stderr_tail
         preview = line[:160]
-        super().__init__(f"failed to decode app-server message: {preview!r}")
+        super().__init__(
+            _compose_message(
+                f"failed to decode app-server message: {preview!r}",
+                stderr_tail=stderr_tail,
+            )
+        )
 
 
 class JsonRpcError(CodexError):

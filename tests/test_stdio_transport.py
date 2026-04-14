@@ -9,7 +9,13 @@ from typing import Any, cast
 
 import pytest
 
-from codex_agent_sdk import CodexNotFoundError, StartupError, StartupTimeoutError
+from codex_agent_sdk import (
+    CodexNotFoundError,
+    MessageDecodeError,
+    StartupError,
+    StartupTimeoutError,
+    TransportClosedError,
+)
 from codex_agent_sdk.options import AppServerConfig
 from codex_agent_sdk.transport import StdioTransport
 
@@ -175,6 +181,186 @@ async def test_start_uses_configured_startup_timeout(monkeypatch: pytest.MonkeyP
     error = exc_info.value
     assert error.timeout_seconds == 0.01
     assert error.command == ("codex", "app-server", "--listen", "stdio://")
+
+
+@pytest.mark.asyncio
+async def test_read_stdout_envelope_decodes_chunked_jsonl_frames(tmp_path: Path) -> None:
+    script = _write_executable_script(
+        tmp_path / "chunked_codex.py",
+        """
+        import sys
+        import time
+
+        parts = [
+            '{"id":1,',
+            '"method":"thread/started",',
+            '"params":{"threadId":"thread_123"}}',
+            "\\n",
+        ]
+        for part in parts:
+            sys.stdout.write(part)
+            sys.stdout.flush()
+            time.sleep(0.02)
+        sys.stdin.read()
+        """,
+    )
+    transport = StdioTransport(
+        AppServerConfig(codex_bin=str(script)),
+        stdout_read_chunk_bytes=5,
+    )
+
+    async with transport:
+        envelope = await asyncio.wait_for(
+            transport.read_stdout_envelope(),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+    assert envelope == {
+        "id": 1,
+        "method": "thread/started",
+        "params": {"threadId": "thread_123"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_read_stdout_envelope_raises_decode_error_for_invalid_json(tmp_path: Path) -> None:
+    script = _write_executable_script(
+        tmp_path / "invalid_json_codex.py",
+        """
+        import sys
+        import time
+
+        sys.stderr.write("reader probe stderr\\n")
+        sys.stderr.flush()
+        time.sleep(0.02)
+        sys.stdout.write("{broken-json\\n")
+        sys.stdout.flush()
+        sys.stdin.read()
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script)))
+
+    async with transport:
+        with pytest.raises(MessageDecodeError) as exc_info:
+            await asyncio.wait_for(
+                transport.read_stdout_envelope(),
+                timeout=IO_TIMEOUT_SECONDS,
+            )
+
+    error = exc_info.value
+    assert error.line == "{broken-json"
+    assert error.stderr_tail is not None
+    assert "reader probe stderr" in error.stderr_tail
+    assert "reader probe stderr" in str(error)
+
+
+@pytest.mark.asyncio
+async def test_read_stdout_line_raises_decode_error_for_invalid_utf8(tmp_path: Path) -> None:
+    script = _write_executable_script(
+        tmp_path / "invalid_utf8_codex.py",
+        """
+        import sys
+
+        sys.stdout.buffer.write(b"\\xff\\n")
+        sys.stdout.buffer.flush()
+        sys.stdin.read()
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script)))
+
+    async with transport:
+        with pytest.raises(MessageDecodeError) as exc_info:
+            await asyncio.wait_for(transport.read_stdout_line(), timeout=IO_TIMEOUT_SECONDS)
+
+    error = exc_info.value
+    assert isinstance(error.original_error, UnicodeDecodeError)
+    assert error.line == "\ufffd"
+
+
+@pytest.mark.asyncio
+async def test_read_stdout_envelope_returns_none_on_clean_eof_between_frames(
+    tmp_path: Path,
+) -> None:
+    script = _write_executable_script(
+        tmp_path / "clean_eof_codex.py",
+        """
+        import json
+        import sys
+        import time
+
+        print(json.dumps({"id": 7, "result": {"ok": True}}), flush=True)
+        sys.stdout.close()
+        time.sleep(0.3)
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script)))
+
+    async with transport:
+        envelope = await asyncio.wait_for(
+            transport.read_stdout_envelope(),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+        eof_message = await asyncio.wait_for(
+            transport.read_stdout_envelope(),
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+    assert envelope == {"id": 7, "result": {"ok": True}}
+    assert eof_message is None
+
+
+@pytest.mark.asyncio
+async def test_read_stdout_line_raises_transport_closed_for_midframe_eof(tmp_path: Path) -> None:
+    script = _write_executable_script(
+        tmp_path / "partial_eof_codex.py",
+        """
+        import sys
+        import time
+
+        sys.stdout.write('{"id":1')
+        sys.stdout.flush()
+        sys.stdout.close()
+        time.sleep(0.3)
+        """,
+    )
+    transport = StdioTransport(AppServerConfig(codex_bin=str(script)))
+
+    async with transport:
+        with pytest.raises(TransportClosedError) as exc_info:
+            await asyncio.wait_for(transport.read_stdout_line(), timeout=IO_TIMEOUT_SECONDS)
+
+    assert "partial JSONL frame" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_read_stdout_line_raises_decode_error_when_frame_exceeds_limit(
+    tmp_path: Path,
+) -> None:
+    script = _write_executable_script(
+        tmp_path / "large_frame_codex.py",
+        """
+        import sys
+
+        payload = '{"payload":"' + ('x' * 80) + '"}\\n'
+        sys.stdout.write(payload)
+        sys.stdout.flush()
+        sys.stdin.read()
+        """,
+    )
+    transport = StdioTransport(
+        AppServerConfig(codex_bin=str(script)),
+        stdout_max_frame_bytes=32,
+        stdout_read_chunk_bytes=8,
+    )
+
+    async with transport:
+        with pytest.raises(MessageDecodeError) as exc_info:
+            await asyncio.wait_for(transport.read_stdout_line(), timeout=IO_TIMEOUT_SECONDS)
+
+    error = exc_info.value
+    assert isinstance(error.original_error, ValueError)
+    assert "exceeded 32 bytes" in str(error.original_error)
+    assert error.line.startswith('{"payload":"')
 
 
 def _write_executable_script(path: Path, body: str) -> Path:

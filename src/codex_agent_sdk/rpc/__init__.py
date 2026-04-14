@@ -1,3 +1,8 @@
 """JSON-RPC framing and connection management layer."""
 
-__all__: list[str] = []
+from .jsonrpc import JsonRpcEnvelope, parse_jsonrpc_envelope
+
+__all__ = [
+    "JsonRpcEnvelope",
+    "parse_jsonrpc_envelope",
+]
