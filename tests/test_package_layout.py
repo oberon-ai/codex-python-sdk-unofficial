@@ -14,6 +14,7 @@ class PackageLayoutTests(unittest.TestCase):
             "codex_agent_sdk.query",
             "codex_agent_sdk.events",
             "codex_agent_sdk.approvals",
+            "codex_agent_sdk.retry",
             "codex_agent_sdk.results",
             "codex_agent_sdk.transport",
             "codex_agent_sdk.transport.stdio",

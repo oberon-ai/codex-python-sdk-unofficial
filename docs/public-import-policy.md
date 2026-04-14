@@ -16,12 +16,14 @@ of the intended public API contract.
 
 ## Stable support modules
 
-Two focused modules are also treated as stable support surfaces:
+Three focused modules are also treated as stable support surfaces:
 
 - `codex_agent_sdk.options`
   - configuration dataclasses and timeout policy helpers
 - `codex_agent_sdk.errors`
   - public exception types and JSON-RPC error classification helpers
+- `codex_agent_sdk.retry`
+  - opt-in overload retry helpers and retry policy dataclasses
 
 These modules may be imported directly when a caller wants a narrower import or
 needs type names without importing the full barrel.

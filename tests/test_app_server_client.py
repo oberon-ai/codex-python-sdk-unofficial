@@ -147,6 +147,58 @@ async def test_late_response_after_timeout_is_logged_and_connection_stays_usable
 
 
 @pytest.mark.asyncio
+async def test_cancelling_request_task_releases_waiter_and_connection_stays_usable(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="codex_agent_sdk.rpc.router")
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(request_ref="initialize", result={"protocolVersion": 2}),
+        expect_notification("initialized"),
+        expect_request("thread/start", save_as="thread_start", params={"ephemeral": True}),
+        sleep_action(120),
+        send_response(request_ref="thread_start", result={"threadId": "thread_cancelled"}),
+        expect_request(
+            "thread/resume",
+            save_as="thread_resume",
+            params={"threadId": "thread_cancelled"},
+        ),
+        send_response(
+            request_ref="thread_resume",
+            result={"threadId": "thread_cancelled", "status": "resumed"},
+        ),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="cancelled_request_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        await client.initialize()
+
+        request_task = asyncio.create_task(client.request("thread/start", {"ephemeral": True}))
+        await asyncio.sleep(0.05)
+        request_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(request_task, timeout=IO_TIMEOUT_SECONDS)
+
+        assert client._connection._requests.pending_count == 0
+
+        await asyncio.sleep(0.15)
+        resumed = await client.request(
+            "thread/resume",
+            {"threadId": "thread_cancelled"},
+            timeout=IO_TIMEOUT_SECONDS,
+        )
+
+    assert resumed == {"threadId": "thread_cancelled", "status": "resumed"}
+    assert "ignoring late JSON-RPC response" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_unexpected_eof_releases_pending_request_waiter(tmp_path: Path) -> None:
     script = FakeAppServerScript.from_actions(
         expect_request("initialize", save_as="initialize"),

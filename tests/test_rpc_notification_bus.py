@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 
 import pytest
 
@@ -8,6 +9,15 @@ from codex_agent_sdk import NotificationSubscriptionOverflowError
 from codex_agent_sdk.rpc import JsonRpcNotification, JsonRpcNotificationBus
 
 IO_TIMEOUT_SECONDS = 1.0
+
+
+def _stream_waiter_task_names() -> list[str]:
+    current_task = asyncio.current_task()
+    return sorted(
+        task.get_name()
+        for task in asyncio.all_tasks()
+        if task is not current_task and task.get_name().startswith("codex-agent-sdk.stream-")
+    )
 
 
 def _notification(
@@ -26,6 +36,12 @@ def _notification(
         params=params,
         _params_present=True,
     )
+
+
+async def _next_notification(
+    notifications: AsyncIterator[JsonRpcNotification],
+) -> JsonRpcNotification:
+    return await anext(notifications)
 
 
 @pytest.mark.asyncio
@@ -106,3 +122,23 @@ async def test_subscription_created_after_bus_failure_inherits_terminal_error() 
 
     with pytest.raises(RuntimeError, match="connection failed"):
         await asyncio.wait_for(anext(subscription), timeout=IO_TIMEOUT_SECONDS)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_notification_consumer_cleans_up_internal_wait_tasks() -> None:
+    bus = JsonRpcNotificationBus()
+    notifications = bus.subscribe_all().iter_notifications()
+    consumer_task: asyncio.Task[JsonRpcNotification] = asyncio.create_task(
+        _next_notification(notifications),
+        name="notification-consumer",
+    )
+
+    await asyncio.sleep(0.05)
+    consumer_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(consumer_task, timeout=IO_TIMEOUT_SECONDS)
+
+    await asyncio.sleep(0)
+    assert bus.subscriber_count == 0
+    assert _stream_waiter_task_names() == []

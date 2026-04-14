@@ -5,6 +5,7 @@ Happy-path imports should come from this module:
 - ``query()`` for one-shot scripted use
 - ``CodexSDKClient`` for stateful thread workflows
 - ``AppServerClient`` for low-level JSON-RPC access
+- ``retry_on_overload()`` for opt-in overload backoff on safe operations
 - ``CodexOptions`` and ``AppServerConfig`` for configuration
 
 Import policy:
@@ -88,6 +89,11 @@ from .options import (
 )
 from .query import query
 from .results import TurnHandle, TurnResult
+from .retry import (
+    DEFAULT_OVERLOAD_RETRY_POLICY,
+    OverloadRetryPolicy,
+    retry_on_overload,
+)
 
 __all__ = [
     "ApprovalDecision",
@@ -108,6 +114,7 @@ __all__ = [
     "CodexTimeoutError",
     "CommandOutputDeltaEvent",
     "DEFAULT_SHUTDOWN_TIMEOUT_SECONDS",
+    "DEFAULT_OVERLOAD_RETRY_POLICY",
     "DEFAULT_STARTUP_TIMEOUT_SECONDS",
     "DEFAULT_TIMEOUT_POLICY",
     "DuplicateRequestIdError",
@@ -127,6 +134,7 @@ __all__ = [
     "MessageDecodeError",
     "NotificationSubscriptionOverflowError",
     "NotInitializedError",
+    "OverloadRetryPolicy",
     "ProcessExitError",
     "ProtocolError",
     "query",
@@ -160,4 +168,5 @@ __all__ = [
     "UnexpectedMessageError",
     "is_retryable_error",
     "map_jsonrpc_error",
+    "retry_on_overload",
 ]

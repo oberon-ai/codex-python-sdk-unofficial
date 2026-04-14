@@ -34,9 +34,11 @@ These names should be importable from `codex_agent_sdk`:
 | `CodexSDKClient` | class | High-level stateful client for thread workflows and streamed turn events. |
 | `TurnHandle` | class | Handle for one in-flight or completed turn, including event iteration and lifecycle helpers. |
 | `TurnResult` | dataclass | Final summarized result for a turn. |
+| `OverloadRetryPolicy` | dataclass | Opt-in backoff policy for replaying overload-safe operations. |
 | `TurnEvent` | type alias | Union of typed high-level events plus raw passthrough wrappers. |
 | `ApprovalRequest` | dataclass | Typed approval request surfaced from server-initiated JSON-RPC requests. |
 | `ApprovalDecision` | type alias / dataclass union | Structured approval response values sent back to the app-server. |
+| `retry_on_overload()` | async helper | Retry a caller-supplied async operation after transient overload using exponential backoff and jitter. |
 | `query()` | async generator function | One-shot convenience helper that creates a temporary client, runs exactly one turn, streams events, and closes. |
 
 The event classes below should also be public because they are part of the typed streaming contract:
@@ -104,6 +106,20 @@ Contract notes:
 - `startup_timeout` covers both subprocess launch and the initial `initialize` response wait. It is one startup budget, not two unrelated helper timeouts.
 - The low-level client performs the required handshake automatically: send `initialize`, then send `initialized`, then allow other methods.
 - Stderr from the subprocess is captured and surfaced on startup or shutdown failures instead of being swallowed.
+
+### `OverloadRetryPolicy` and `retry_on_overload()`
+
+The SDK should expose a small opt-in helper for transient app-server overload.
+
+Contract notes:
+
+- Retry remains off by default. Callers must opt in explicitly.
+- The helper retries only `RetryableOverloadError`, not arbitrary failures.
+- The helper uses exponential backoff plus jitter and exposes the policy values as a dataclass.
+- Exhausting the local retry budget raises `RetryBudgetExceededError` chained from the last overload response.
+- Callers should use the helper for startup or read-only flows where replay is safe.
+- Callers should not blindly use the helper for mutating methods, approval decisions, or other side-effecting requests unless they have an explicit idempotency story.
+- Startup retry should create a fresh `AppServerClient` per attempt because a failed `initialize()` closes that connection.
 
 ## `query()`: One-Shot Helper
 
@@ -441,6 +457,7 @@ Design notes:
 - `request(timeout=...)` is a local wait deadline only. A request timeout does not imply that the server abandoned the work, and it does not close the connection.
 - Raw notification and server-request iterators wait indefinitely by default. Callers who want an idle deadline should wrap `anext(...)` or the async iterator in `asyncio.timeout(...)`.
 - Explicitly closing a notification subscription unregisters it immediately and ends its iterator cleanly.
+- Cancelling a blocked notification or server-request consumer must also clean up any SDK-internal helper tasks created to wait on queue data versus close signals.
 - Explicit `close()` releases any pending request waiters with a connection-closed error and ends the raw inbound iterators cleanly.
 - Unexpected EOF after startup is treated as connection failure. Pending request waiters receive `TransportClosedError`, and raw inbound iterators raise the same failure once queued items are drained.
 - The typed helpers above should cover the stable app-server methods needed by the v1 high-level client.

@@ -22,6 +22,15 @@ from codex_agent_sdk.rpc import (
 IO_TIMEOUT_SECONDS = 1.0
 
 
+def _stream_waiter_task_names() -> list[str]:
+    current_task = asyncio.current_task()
+    return sorted(
+        task.get_name()
+        for task in asyncio.all_tasks()
+        if task is not current_task and task.get_name().startswith("codex-agent-sdk.stream-")
+    )
+
+
 async def _next_server_request(router: JsonRpcServerRequestRouter) -> JsonRpcRequest:
     return await anext(router.iter_requests())
 
@@ -269,3 +278,18 @@ async def test_server_request_router_clears_pending_requests_from_resolution_not
 
     assert cleared is True
     assert router.pending_count == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelling_server_request_consumer_cleans_up_internal_wait_tasks() -> None:
+    router = JsonRpcServerRequestRouter()
+    consumer_task = asyncio.create_task(_next_server_request(router), name="server-request")
+
+    await asyncio.sleep(0.05)
+    consumer_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(consumer_task, timeout=IO_TIMEOUT_SECONDS)
+
+    await asyncio.sleep(0)
+    assert _stream_waiter_task_names() == []

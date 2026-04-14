@@ -141,10 +141,19 @@ class _InboundMessageStream(Generic[_T]):
             self._closed_event.wait(),
             name="codex-agent-sdk.stream-close-wait",
         )
-        done, pending = await asyncio.wait(
-            {get_task, closed_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        wait_tasks = (get_task, closed_task)
+        try:
+            done, pending = await asyncio.wait(
+                set(wait_tasks),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            for task in wait_tasks:
+                task.cancel()
+            for task in wait_tasks:
+                with suppress(asyncio.CancelledError):
+                    await task
+            raise
         for task in pending:
             task.cancel()
             with suppress(asyncio.CancelledError):

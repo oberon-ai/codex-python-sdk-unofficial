@@ -77,7 +77,8 @@ CodexError
 - `NotInitializedError` and `AlreadyInitializedError` subclass both `HandshakeError`
   and `JsonRpcServerError`.
 - `RetryBudgetExceededError` remains a retryable overload subclass because it still
-  represents transient capacity pressure rather than a fatal protocol incompatibility.
+  represents overload semantics, whether the budget was exhausted by the server or by
+  the SDK's own opt-in retry helper.
 - `asyncio.CancelledError` stays outside this tree on purpose.
 
 ## Error Mapping Rules
@@ -92,7 +93,7 @@ CodexError
 | Stdin write fails or is cancelled mid-frame | `TransportWriteError` | Fatal connection failure because JSONL framing may be broken |
 | JSON-RPC standard error codes | Matching `JsonRpc*Error` subclass | Preserve `code`, `message`, `data`, method, and request id |
 | JSON-RPC server overload (`-32001`, overload marker, or equivalent) | `RetryableOverloadError` | Distinct from fatal server errors |
-| JSON-RPC retry-budget exhaustion text during overload | `RetryBudgetExceededError` | Still considered retryable by helper logic |
+| JSON-RPC retry-budget exhaustion text during overload, or local helper exhaustion after repeated overload | `RetryBudgetExceededError` | Chained from the last overload when the local helper runs out of attempts |
 | Request before handshake | `NotInitializedError` | Protocol and handshake failure |
 | Repeated `initialize` on same connection | `AlreadyInitializedError` | Protocol and handshake failure |
 | Unexpected envelope ordering or impossible state transitions | `UnexpectedMessageError` | Local protocol bug or incompatible server behavior |
@@ -116,7 +117,7 @@ The SDK defines these default local timeouts:
 | High-level turn completion (`TurnHandle.wait()`) | no default timeout | caller-controlled | Turns can be long-running or intentionally blocked on approvals |
 | Turn event streaming | no default timeout | caller-controlled | Lack of new events is not itself an error |
 | Approval-request wait | no default timeout | caller-controlled | Safe default is visible blocking until a user or policy decides |
-| Overload retry | off by default | explicit helper or retry wrapper | Hidden retries would change semantics and mask latency |
+| Overload retry | off by default | explicit helper or retry wrapper | Hidden retries would change semantics and mask latency; callers must choose where replay is safe |
 
 ### Timeout principles
 
@@ -157,10 +158,10 @@ If a caller cancels while awaiting a request result after the request has been w
 
 - the local waiter gets `CancelledError`
 - the connection remains alive
-- the pending request remains registered until a real response or connection failure
-
-Later implementation should use `asyncio.shield(...)` around the connection-owned future
-so cancelling one caller does not cancel the shared correlation state.
+- the pending request is released locally immediately so cancelled callers do not linger
+  in correlation state
+- a later server response is treated as a late response, logged, and discarded instead
+  of failing the connection
 
 If the connection closes or fails before the response arrives:
 
@@ -178,6 +179,8 @@ If a turn event iterator is cancelled or abandoned:
 - the turn is not auto-interrupted
 - the active turn context keeps its queue and completion future
 - `interrupt()` and `wait()` remain valid
+- SDK-internal helper tasks created to wait on queue data versus close signals are
+  cancelled immediately so abandoned stream consumers do not leak background tasks
 
 Because v1 uses a single-consumer event queue, callers should not assume they can
 abandon one stream consumer and attach a second one later.
@@ -230,11 +233,14 @@ This matters especially for:
 Later transport and client work should follow these implementation constraints:
 
 1. Keep `CancelledError` visible to callers and do not wrap it.
-2. Preserve request futures even when a specific waiter is cancelled.
+2. Release cancelled request waiters immediately and treat later responses as benign
+   late responses rather than fatal correlation errors.
 3. Fail the whole connection on mid-frame write cancellation or write corruption risk.
 4. Keep startup and shutdown deadlines in config, but leave turn and approval waits
    timeout-free by default.
 5. Map overload into a dedicated retryable exception class and keep a small helper like
-   `is_retryable_error(...)`.
+   `retry_on_overload(...)` opt-in rather than automatic.
 6. Preserve stderr and raw JSON-RPC payloads on exceptions so debugging remains possible
    without rerunning under a debugger.
+7. Restrict overload replay to startup or read-only flows unless the caller has an
+   explicit idempotency guarantee for side-effecting operations.
