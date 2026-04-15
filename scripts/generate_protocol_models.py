@@ -9,16 +9,17 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, get_args, get_origin
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
+UV_LOCK_PATH = REPO_ROOT / "uv.lock"
 VENDOR_MANIFEST_PATH = (
     REPO_ROOT / "tests" / "fixtures" / "schema_snapshots" / "vendor_manifest.json"
 )
-CODEGEN_REQUIREMENTS_PATH = REPO_ROOT / "requirements" / "codegen.txt"
 OUTPUT_PATH = REPO_ROOT / "src" / "codex_agent_sdk" / "generated" / "stable.py"
 NOTIFICATION_REGISTRY_OUTPUT_PATH = (
     REPO_ROOT / "src" / "codex_agent_sdk" / "generated" / "stable_notification_registry.py"
@@ -29,6 +30,7 @@ SERVER_REQUEST_REGISTRY_OUTPUT_PATH = (
 
 SCHEMA_ARTIFACT_NAME = "stable"
 GENERATOR_MODULE = "datamodel_code_generator"
+GENERATOR_PACKAGE_NAME = "datamodel-code-generator"
 SCHEMA_VERSION = "draft-07"
 TEMP_GENERATED_MODULE_NAME = "_codex_agent_sdk_generated_stable_temp"
 CODEGEN_FLAGS = (
@@ -187,13 +189,32 @@ def load_generation_target() -> GenerationTarget:
     )
 
 
+def load_uv_lock() -> dict[str, Any]:
+    if not UV_LOCK_PATH.exists():
+        raise SystemExit(
+            f"Missing lockfile: {UV_LOCK_PATH}\n"
+            "Create it with `uv lock` or sync the project first with `uv sync`."
+        )
+    return tomllib.loads(UV_LOCK_PATH.read_text(encoding="utf-8"))
+
+
 def read_codegen_version_pin() -> str:
-    for line in CODEGEN_REQUIREMENTS_PATH.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if stripped.startswith("datamodel-code-generator=="):
-            return stripped.removeprefix("datamodel-code-generator==")
+    packages = load_uv_lock().get("package", [])
+    matches = [
+        package["version"]
+        for package in packages
+        if package.get("name") == GENERATOR_PACKAGE_NAME and isinstance(package.get("version"), str)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise SystemExit(
+            f"Expected exactly one locked {GENERATOR_PACKAGE_NAME} version in {UV_LOCK_PATH}, "
+            f"found {matches!r}."
+        )
     raise SystemExit(
-        f"Could not find a datamodel-code-generator pin in {CODEGEN_REQUIREMENTS_PATH}."
+        f"Could not find {GENERATOR_PACKAGE_NAME} in {UV_LOCK_PATH}.\n"
+        "Sync the locked codegen toolchain with `uv sync --group codegen`."
     )
 
 
@@ -216,11 +237,11 @@ def ensure_codegen_version_matches_pin() -> str:
     installed_version = read_installed_codegen_version()
     if installed_version != pinned_version:
         raise SystemExit(
-            "Installed datamodel-code-generator version does not match the repo pin.\n"
-            f"Pinned version: {pinned_version}\n"
+            "Installed datamodel-code-generator version does not match the locked repo version.\n"
+            f"Locked version: {pinned_version}\n"
             f"Installed version: {installed_version}\n"
-            "Install the pinned maintainer toolchain with:\n"
-            "python -m pip install -e . -r requirements/dev.txt -r requirements/codegen.txt"
+            "Sync the locked maintainer toolchain with:\n"
+            "uv sync --group codegen"
         )
     return installed_version
 
@@ -554,7 +575,7 @@ def verify_output(*, target: GenerationTarget, rendered_text: str) -> None:
     if current_text != rendered_text:
         raise SystemExit(
             "Generated wire models are out of date.\n"
-            "Run `python scripts/generate_protocol_models.py` to refresh "
+            "Run `uv run --group codegen python scripts/generate_protocol_models.py` to refresh "
             f"{target.output_path.relative_to(REPO_ROOT)}."
         )
 
@@ -590,7 +611,7 @@ def verify_notification_registry(
     if current_text != notification_registry_text:
         raise SystemExit(
             "Generated notification registry is out of date.\n"
-            "Run `python scripts/generate_protocol_models.py` to refresh "
+            "Run `uv run --group codegen python scripts/generate_protocol_models.py` to refresh "
             f"{NOTIFICATION_REGISTRY_OUTPUT_PATH.relative_to(REPO_ROOT)}."
         )
 
@@ -625,7 +646,7 @@ def verify_server_request_registry(
     if current_text != server_request_registry_text:
         raise SystemExit(
             "Generated server request registry is out of date.\n"
-            "Run `python scripts/generate_protocol_models.py` to refresh "
+            "Run `uv run --group codegen python scripts/generate_protocol_models.py` to refresh "
             f"{SERVER_REQUEST_REGISTRY_OUTPUT_PATH.relative_to(REPO_ROOT)}."
         )
 

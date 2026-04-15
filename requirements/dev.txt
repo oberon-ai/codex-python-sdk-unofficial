@@ -1,7 +1,0 @@
-# Pinned development and verification toolchain for local work and CI.
--r runtime.txt
-build==1.4.3
-mypy==1.20.1
-pytest==9.0.3
-pytest-asyncio==1.3.0
-ruff==0.15.10

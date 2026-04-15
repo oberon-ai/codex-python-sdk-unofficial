@@ -660,7 +660,14 @@ class StdioTransport:
             return self._process_exit_error
 
         process = self._process
-        if process is None or process.returncode in (None, 0):
+        if process is None:
+            return self._process_exit_error
+
+        if process.returncode is None:
+            await process.wait()
+            self._last_returncode = process.returncode
+
+        if process.returncode in (None, 0):
             return self._process_exit_error
 
         return await self._build_process_exit_error(process.returncode)

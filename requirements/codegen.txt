@@ -1,3 +1,0 @@
-# Pinned code generation tooling for protocol model regeneration only.
--r runtime.txt
-datamodel-code-generator==0.56.0

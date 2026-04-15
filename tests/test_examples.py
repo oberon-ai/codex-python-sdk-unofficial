@@ -18,8 +18,17 @@ from codex_agent_sdk.testing import (
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_ROOT = REPO_ROOT / "examples"
-VENV_PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
 FAKE_SERVER_MODULE = "codex_agent_sdk.testing.fake_app_server"
+
+
+def _project_python() -> str:
+    if os.name == "nt":
+        candidate = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+    else:
+        candidate = REPO_ROOT / ".venv" / "bin" / "python"
+    if candidate.exists():
+        return str(candidate)
+    return sys.executable
 
 
 def test_workspace_brief_runs_without_required_args(tmp_path: Path) -> None:
@@ -350,7 +359,7 @@ def _run_example(
         env.update(env_overrides)
 
     return subprocess.run(
-        [str(VENV_PYTHON), str(EXAMPLES_ROOT / script_name), *args],
+        [_project_python(), str(EXAMPLES_ROOT / script_name), *args],
         input=input_text,
         text=True,
         capture_output=True,

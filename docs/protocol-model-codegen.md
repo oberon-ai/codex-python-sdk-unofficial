@@ -74,16 +74,16 @@ assert turn_start.model_dump(by_alias=False) == {
 
 ## Rebuild And Drift Check
 
-Install the maintainer codegen toolchain first:
+Sync the maintainer codegen toolchain first:
 
 ```bash
-python -m pip install -e . -r requirements/dev.txt -r requirements/codegen.txt
+uv sync --group codegen
 ```
 
 Regenerate the checked-in stable models:
 
 ```bash
-python scripts/generate_protocol_models.py
+uv run --group codegen python scripts/generate_protocol_models.py
 ```
 
 That one command refreshes all of:
@@ -95,11 +95,11 @@ That one command refreshes all of:
 Verify that the checked-in generated file is in sync:
 
 ```bash
-python scripts/generate_protocol_models.py --check
+uv run --group codegen python scripts/generate_protocol_models.py --check
 ```
 
 The script fails fast if the installed `datamodel-code-generator` version does
-not match the repo pin in `requirements/codegen.txt`.
+not match the locked repo version recorded in `uv.lock`.
 
 The test suite also carries a regression layer that checks:
 
@@ -110,10 +110,11 @@ The test suite also carries a regression layer that checks:
 - the repo still tracks both stable and experimental schema snapshots while
   defaulting code generation to the stable snapshot
 
-That keeps ordinary `python -m pytest` runs useful even when the maintainer-only
+That keeps ordinary `uv run pytest` runs useful even when the maintainer-only
 codegen toolchain is not installed. In a maintainer environment with
 `datamodel-code-generator` and `ruff` available, the regression suite also runs
-`python scripts/generate_protocol_models.py --check` directly.
+`uv run --group codegen python scripts/generate_protocol_models.py --check`
+directly.
 
 ## Intentional Snapshot Updates
 
@@ -123,27 +124,27 @@ When Codex actually changed upstream, use this workflow:
    - Normal pin-preserving refresh:
 
    ```bash
-   python scripts/vendor_protocol_schema.py
+   uv run python scripts/vendor_protocol_schema.py
    ```
 
    - Explicit pin bump when the Codex CLI version changed:
 
    ```bash
-   python scripts/vendor_protocol_schema.py --allow-version-change
+   uv run python scripts/vendor_protocol_schema.py --allow-version-change
    ```
 
 2. Regenerate the checked-in Python artifacts:
 
    ```bash
-   python scripts/generate_protocol_models.py
+   uv run --group codegen python scripts/generate_protocol_models.py
    ```
 
 3. Re-run the no-write checks and the relevant tests:
 
    ```bash
-   python scripts/vendor_protocol_schema.py --check
-   python scripts/generate_protocol_models.py --check
-   python -m pytest tests/test_codegen_regressions.py -q
+   uv run python scripts/vendor_protocol_schema.py --check
+   uv run --group codegen python scripts/generate_protocol_models.py --check
+   uv run pytest tests/test_codegen_regressions.py -q
    ```
 
 4. Review the diff intentionally.

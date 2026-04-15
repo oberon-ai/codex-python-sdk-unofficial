@@ -14,19 +14,27 @@ class ProjectConfigurationTests(unittest.TestCase):
         build_system = PYPROJECT_DATA["build-system"]
         project = PYPROJECT_DATA["project"]
 
-        self.assertEqual(build_system["build-backend"], "setuptools.build_meta")
-        self.assertIn("setuptools>=69", build_system["requires"])
+        self.assertEqual(build_system["build-backend"], "uv_build")
+        self.assertIn("uv_build>=0.10.10,<0.11.0", build_system["requires"])
         self.assertEqual(project["requires-python"], ">=3.11")
         self.assertEqual(project["name"], "codex-agent-sdk-unofficial")
 
-    def test_dev_extra_includes_quality_tools(self) -> None:
-        dev_dependencies = set(PYPROJECT_DATA["project"]["optional-dependencies"]["dev"])
+    def test_dependency_groups_include_quality_and_codegen_tools(self) -> None:
+        dependency_groups = PYPROJECT_DATA["dependency-groups"]
+        dev_dependencies = set(dependency_groups["dev"])
+        codegen_dependencies = set(dependency_groups["codegen"])
 
-        self.assertIn("build>=1.4,<2", dev_dependencies)
         self.assertIn("mypy>=1.20,<2", dev_dependencies)
         self.assertIn("pytest>=9,<10", dev_dependencies)
         self.assertIn("pytest-asyncio>=1.3,<2", dev_dependencies)
         self.assertIn("ruff>=0.15,<0.16", dev_dependencies)
+        self.assertEqual(codegen_dependencies, {"datamodel-code-generator>=0.56,<0.57"})
+
+    def test_uv_defaults_to_the_dev_group(self) -> None:
+        tool_uv = PYPROJECT_DATA["tool"]["uv"]
+
+        self.assertEqual(tool_uv["default-groups"], ["dev"])
+        self.assertEqual(tool_uv["build-backend"]["module-name"], "codex_agent_sdk")
 
     def test_quality_tools_preserve_generated_code_boundary(self) -> None:
         ruff = PYPROJECT_DATA["tool"]["ruff"]

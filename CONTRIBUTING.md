@@ -1,5 +1,58 @@
 # Contributing
 
-TODO: explain that one of the motivating features of this repository is for Puck Code to do the implementation work autonomously with human approval to track stable Codex version updates. It can be forked and Pull Requests can be submitted, but they generally should not touch src/codex_agent_sdk. A preference should be framed for submitting Issues to the Github repo that can be triaged by Puck.
+This repository uses `uv` as the only supported project manager and packaging
+workflow. The authoritative project metadata lives in `pyproject.toml`, and
+exact reproducible tool versions live in `uv.lock`.
 
-Local development instructions should be provided using uv.
+## Local Setup
+
+Install the default contributor environment:
+
+```bash
+uv sync
+```
+
+That creates `.venv/`, installs the package in editable mode, and includes the
+default `dev` dependency group.
+
+Run the main verification loop with:
+
+```bash
+uv run pytest
+uv run mypy
+uv run ruff check .
+uv run ruff format --check .
+uv build
+```
+
+## Codegen Workflow
+
+Protocol model regeneration uses a separate dependency group so ordinary
+contributor syncs stay lean.
+
+Sync the extra tooling when you need to regenerate generated artifacts:
+
+```bash
+uv sync --group codegen
+```
+
+Then run:
+
+```bash
+uv run --group codegen python scripts/generate_protocol_models.py
+uv run --group codegen python scripts/generate_protocol_models.py --check
+```
+
+Schema snapshot vendoring stays stdlib-only apart from the pinned `codex` CLI:
+
+```bash
+uv run python scripts/vendor_protocol_schema.py --check
+```
+
+## Review Boundaries
+
+- Do not hand-edit modules under `src/codex_agent_sdk/generated/`.
+- Keep handwritten behavior in the public SDK, protocol, transport, and RPC
+  packages.
+- When schema inputs change, refresh vendored snapshots first, then regenerate
+  the checked-in protocol artifacts.

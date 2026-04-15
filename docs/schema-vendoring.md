@@ -67,7 +67,7 @@ explicit opt-in path, mirroring `AppServerConfig(experimental_api=True)`.
 The refresh entrypoint is:
 
 ```bash
-python scripts/vendor_protocol_schema.py
+uv run python scripts/vendor_protocol_schema.py
 ```
 
 Recommended maintenance flow:
@@ -78,13 +78,13 @@ Recommended maintenance flow:
 3. Verify the current checkout first:
 
    ```bash
-   python scripts/vendor_protocol_schema.py --check
+   uv run python scripts/vendor_protocol_schema.py --check
    ```
 
 4. If you are intentionally bumping the schema pin, rerun with explicit opt-in:
 
    ```bash
-   python scripts/vendor_protocol_schema.py --allow-version-change
+   uv run python scripts/vendor_protocol_schema.py --allow-version-change
    ```
 
 The script fails fast on version mismatch unless `--allow-version-change` is

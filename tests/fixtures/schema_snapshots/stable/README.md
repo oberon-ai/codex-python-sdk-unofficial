@@ -13,6 +13,6 @@ Refresh command template:
 codex app-server generate-json-schema --out <OUT_DIR>
 ```
 
-Use `python scripts/vendor_protocol_schema.py` from the repo root rather than
-checking in the raw CLI output directly. The script rewrites the bundle into a
-deterministic, sorted JSON form that is easier to diff in pull requests.
+Use `uv run python scripts/vendor_protocol_schema.py` from the repo root rather
+than checking in the raw CLI output directly. The script rewrites the bundle
+into a deterministic, sorted JSON form that is easier to diff in pull requests.

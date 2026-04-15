@@ -9,13 +9,14 @@ Status: preview. The implemented happy paths today are the low-level `AppServerC
 Requirements:
 
 - Python 3.11+
+- [`uv`](https://docs.astral.sh/uv/) for syncing the project environment
 - A working `codex` CLI installation on your `PATH`
 - Whatever authentication setup your local Codex CLI already requires
 
 Install from source:
 
 ```bash
-python -m pip install -e .
+uv sync
 ```
 
 Stream a single turn with the one-shot helper:
@@ -108,10 +109,11 @@ At the current stage, the low-level app-server client, one-shot query flow, type
 
 ### Prerequisites and installation
 
-You need Python 3.11 or newer and a working `codex` CLI installation. For local development, the standard editable install is:
+You need Python 3.11 or newer, `uv`, and a working `codex` CLI installation.
+For local development, the standard setup is:
 
 ```bash
-python -m pip install -e .
+uv sync
 ```
 
 Contributor and maintainer setup, including dev and codegen dependencies, is documented in [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -153,12 +155,12 @@ The OpenAI team is rapidly developing Codex, so significant changes to the app-s
 
 The repository already checks in pinned stable and experimental schema snapshots under `tests/fixtures/schema_snapshots/`, along with a manifest of the expected Codex version and schema hashes. The intended maintenance loop is:
 
-1. On a scheduled GitHub Actions run, install the pinned maintainer toolchain and run `python scripts/vendor_protocol_schema.py --check`.
-2. If upstream schema or version drift is detected, refresh the vendored snapshots in a dedicated branch, regenerate the stable protocol models and registries with `python scripts/generate_protocol_models.py`, and run the full test suite.
+1. On a scheduled GitHub Actions run, sync the locked maintainer toolchain and run `uv run python scripts/vendor_protocol_schema.py --check`.
+2. If upstream schema or version drift is detected, refresh the vendored snapshots in a dedicated branch, regenerate the stable protocol models and registries with `uv run --group codegen python scripts/generate_protocol_models.py`, and run the full test suite.
 3. Open a reviewable PR containing the snapshot diff, generated artifact diff, and any handwritten compatibility fixes. Oberon maintainers should approve that PR before merge because protocol changes can affect approvals, event routing, and backwards compatibility.
 4. Tag and publish a new package version only after the refreshed SDK passes its compatibility checks.
 
-For users, the safest upgrade path is to pin SDK versions, read the release notes or upgrade PR summary, and upgrade deliberately instead of floating to the newest commit. Source users can pull the updated revision and reinstall with `python -m pip install -e .`; maintainers should also rerun the vendoring and codegen checks when intentionally tracking a new upstream Codex release.
+For users, the safest upgrade path is to pin SDK versions, read the release notes or upgrade PR summary, and upgrade deliberately instead of floating to the newest commit. Source users can pull the updated revision and resync with `uv sync`; maintainers should also rerun the vendoring and codegen checks when intentionally tracking a new upstream Codex release.
 
 ### Deprecation Plan
 

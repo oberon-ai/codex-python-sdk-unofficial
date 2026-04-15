@@ -1,2 +1,0 @@
-# Pinned third-party runtime dependency set for reproducible local verification.
-pydantic==2.13.0
