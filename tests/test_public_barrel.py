@@ -24,6 +24,8 @@ from codex_agent_sdk import (
     OverloadRetryPolicy,
     PermissionGrantScope,
     PermissionsApprovalRequest,
+    SyncCodexSDKClient,
+    SyncTurnHandle,
     TurnCompletion,
     TurnEvent,
     TurnHandle,
@@ -44,6 +46,7 @@ options_module = importlib.import_module("codex_agent_sdk.options")
 query_module = importlib.import_module("codex_agent_sdk.query")
 retry_module = importlib.import_module("codex_agent_sdk.retry")
 results_module = importlib.import_module("codex_agent_sdk.results")
+sync_client_module = importlib.import_module("codex_agent_sdk.sync_client")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -71,6 +74,8 @@ class PublicBarrelTests(unittest.TestCase):
             "PermissionGrantScope",
             "PermissionsApprovalRequest",
             "query",
+            "SyncCodexSDKClient",
+            "SyncTurnHandle",
             "ThreadStatusChangedEvent",
             "TurnCompletedEvent",
             "TurnCompletion",
@@ -90,6 +95,7 @@ class PublicBarrelTests(unittest.TestCase):
         self.assertIs(AppServerClient, client_module.AppServerClient)
         self.assertIs(AppServerConfig, options_module.AppServerConfig)
         self.assertIs(CodexSDKClient, client_module.CodexSDKClient)
+        self.assertIs(SyncCodexSDKClient, sync_client_module.SyncCodexSDKClient)
         self.assertIs(ApprovalCommandAction, approvals_module.ApprovalCommandAction)
         self.assertIs(ApprovalDecision, approvals_module.ApprovalDecision)
         self.assertIs(ApprovalFileChange, approvals_module.ApprovalFileChange)
@@ -107,6 +113,7 @@ class PublicBarrelTests(unittest.TestCase):
         self.assertIs(OverloadRetryPolicy, retry_module.OverloadRetryPolicy)
         self.assertIs(PermissionGrantScope, approvals_module.PermissionGrantScope)
         self.assertIs(PermissionsApprovalRequest, approvals_module.PermissionsApprovalRequest)
+        self.assertIs(SyncTurnHandle, sync_client_module.SyncTurnHandle)
         self.assertIs(TurnCompletion, results_module.TurnCompletion)
         self.assertIs(TurnHandle, results_module.TurnHandle)
         self.assertIs(TurnItemAggregation, results_module.TurnItemAggregation)
@@ -131,6 +138,7 @@ class PublicBarrelTests(unittest.TestCase):
 
         self.assertIn("query()", docstring)
         self.assertIn("CodexSDKClient", docstring)
+        self.assertIn("SyncCodexSDKClient", docstring)
         self.assertIn("AppServerClient", docstring)
         self.assertIn("retry_on_overload()", docstring)
         self.assertIn("Import policy", docstring)
@@ -148,7 +156,8 @@ class PublicBarrelTests(unittest.TestCase):
 
     def test_placeholder_objects_tell_the_public_api_story(self) -> None:
         self.assertIn("Low-level native-async client", AppServerClient.__doc__ or "")
-        self.assertIn("High-level stateful client", CodexSDKClient.__doc__ or "")
+        self.assertIn("High-level async client", CodexSDKClient.__doc__ or "")
+        self.assertIn("Synchronous wrapper", SyncCodexSDKClient.__doc__ or "")
         self.assertIn("one-shot query helper", query.__doc__ or "")
         self.assertIn("Typed approval request", ApprovalRequest.__doc__ or "")
         self.assertIn("Compact terminal summary", TurnResult.__doc__ or "")

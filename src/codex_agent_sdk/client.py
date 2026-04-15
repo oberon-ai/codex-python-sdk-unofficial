@@ -1,9 +1,8 @@
-"""Public client entry points for the Codex SDK.
+"""Public async client entry points for the Codex SDK.
 
 ``AppServerClient`` is the low-level native-async JSON-RPC client.
-``CodexSDKClient`` is the intended high-level stateful thread client surface.
-The low-level client is the fully usable path today; the higher-level client
-remains preview API until its workflow helpers are implemented.
+``CodexSDKClient`` layers a stateful thread-oriented workflow wrapper on top of
+that low-level surface while preserving typed streamed events and results.
 """
 
 from __future__ import annotations
@@ -11,8 +10,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import suppress
+from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, TypeAlias, TypeVar, overload
+from typing import Any, TypeAlias, TypeVar, cast, overload
 
 from .approvals import (
     ApprovalDecision,
@@ -33,7 +34,7 @@ from .errors import (
     TransportClosedError,
     UnknownServerRequestIdError,
 )
-from .events import TurnCompletedEvent, TurnEvent
+from .events import ThreadStatusChangedEvent, TurnCompletedEvent, TurnEvent, TurnStartedEvent
 from .generated.stable import (
     ApprovalsReviewer,
     AskForApproval,
@@ -88,7 +89,7 @@ from .protocol.adapters import (
 from .protocol.initialize import InitializeResult, parse_initialize_result
 from .protocol.pydantic import dump_wire_value, validate_response_payload
 from .protocol.registries import TypedServerNotification, parse_server_notification
-from .results import TurnCompletion, TurnHandle
+from .results import TurnCompletion, TurnHandle, TurnResult
 from .rpc.connection import JsonRpcConnection
 from .rpc.jsonrpc import JsonRpcNotification, JsonRpcRequest
 from .rpc.router import (
@@ -121,6 +122,73 @@ TurnInputItemLike: TypeAlias = (
     | Mapping[str, object]
 )
 TurnInputLike: TypeAlias = str | TurnInputItemLike | Sequence[TurnInputItemLike]
+_TURN_STREAM_END = object()
+
+
+@dataclass(slots=True)
+class _TurnStreamFailure:
+    error: BaseException
+
+
+@dataclass(slots=True)
+class _TurnEventSubscriber:
+    queue: asyncio.Queue[object] = field(default_factory=asyncio.Queue)
+
+
+@dataclass(slots=True)
+class _ManagedTurnStream:
+    thread_id: str
+    turn_id: str
+    completion_future: asyncio.Future[TurnResult]
+    pump_task: asyncio.Task[None] | None = None
+    _subscribers: list[_TurnEventSubscriber] = field(default_factory=list)
+    _terminal_exception: BaseException | None = None
+    _closed: bool = False
+
+    def subscribe(self) -> AsyncIterator[TurnEvent]:
+        subscriber = _TurnEventSubscriber()
+        if self._terminal_exception is not None:
+            subscriber.queue.put_nowait(_TurnStreamFailure(self._terminal_exception))
+        elif self._closed:
+            subscriber.queue.put_nowait(_TURN_STREAM_END)
+        self._subscribers.append(subscriber)
+        return self._iter_subscriber(subscriber)
+
+    async def _iter_subscriber(self, subscriber: _TurnEventSubscriber) -> AsyncIterator[TurnEvent]:
+        try:
+            while True:
+                item = await subscriber.queue.get()
+                if item is _TURN_STREAM_END:
+                    return
+                if isinstance(item, _TurnStreamFailure):
+                    raise item.error
+                yield cast(TurnEvent, item)
+        finally:
+            self._unsubscribe(subscriber)
+
+    def publish(self, event: TurnEvent) -> None:
+        if self._closed or self._terminal_exception is not None:
+            return
+        for subscriber in tuple(self._subscribers):
+            subscriber.queue.put_nowait(event)
+
+    def fail(self, exc: BaseException) -> None:
+        if self._terminal_exception is not None:
+            return
+        self._terminal_exception = exc
+        for subscriber in tuple(self._subscribers):
+            subscriber.queue.put_nowait(_TurnStreamFailure(exc))
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for subscriber in tuple(self._subscribers):
+            subscriber.queue.put_nowait(_TURN_STREAM_END)
+
+    def _unsubscribe(self, subscriber: _TurnEventSubscriber) -> None:
+        with suppress(ValueError):
+            self._subscribers.remove(subscriber)
 
 
 class AppServerClient:
@@ -909,7 +977,7 @@ class AppServerClient:
 
 
 class CodexSDKClient:
-    """High-level stateful client for thread and turn workflows."""
+    """High-level async client for stateful thread and turn workflows."""
 
     def __init__(
         self,
@@ -923,6 +991,10 @@ class CodexSDKClient:
         self.thread_id: str | None = None
         self.active_turn_id: str | None = None
         self.thread_status: str | None = None
+        self._app_client: AppServerClient | None = None
+        self._client_lock = asyncio.Lock()
+        self._thread_options: CodexOptions | None = None
+        self._turn_streams: dict[str, _ManagedTurnStream] = {}
 
     async def __aenter__(self) -> CodexSDKClient:
         return self
@@ -938,6 +1010,25 @@ class CodexSDKClient:
     async def close(self) -> None:
         """Close the underlying app-server connection for this client."""
 
+        client = self._app_client
+        streams = tuple(self._turn_streams.values())
+
+        try:
+            if client is not None:
+                await client.close()
+            if streams:
+                await asyncio.gather(
+                    *(stream.pump_task for stream in streams if stream.pump_task is not None),
+                    return_exceptions=True,
+                )
+        finally:
+            self._app_client = None
+            self._thread_options = None
+            self._turn_streams.clear()
+            self.thread_id = None
+            self.active_turn_id = None
+            self.thread_status = None
+
     async def start_thread(
         self,
         *,
@@ -946,7 +1037,20 @@ class CodexSDKClient:
     ) -> str:
         """Start a new thread and make it the active thread."""
 
-        raise NotImplementedError("Thread start flows are not implemented yet.")
+        self._raise_if_turn_in_progress("start a new thread")
+        effective_options = CodexOptions.merge(self.options, options)
+        client = await self._get_client()
+        response = await _thread_start_with_options(
+            client,
+            effective_options,
+            ephemeral=ephemeral,
+        )
+        self._activate_thread(
+            thread_id=response.thread.id,
+            thread_status=response.thread.status,
+            thread_options=options,
+        )
+        return response.thread.id
 
     async def resume_thread(
         self,
@@ -956,7 +1060,20 @@ class CodexSDKClient:
     ) -> str:
         """Resume an existing thread and make it the active thread."""
 
-        raise NotImplementedError("Thread resume flows are not implemented yet.")
+        self._raise_if_turn_in_progress("resume a thread")
+        effective_options = CodexOptions.merge(self.options, options)
+        client = await self._get_client()
+        response = await _thread_resume_with_options(
+            client,
+            thread_id=thread_id,
+            options=effective_options,
+        )
+        self._activate_thread(
+            thread_id=response.thread.id,
+            thread_status=response.thread.status,
+            thread_options=options,
+        )
+        return response.thread.id
 
     async def fork_thread(
         self,
@@ -967,28 +1084,111 @@ class CodexSDKClient:
     ) -> str:
         """Fork a thread and make the new branch the active thread."""
 
-        raise NotImplementedError("Thread fork flows are not implemented yet.")
+        self._raise_if_turn_in_progress("fork a thread")
+        source_thread_id = thread_id or self.thread_id
+        if source_thread_id is None:
+            raise ClientStateError("fork_thread() requires an explicit thread_id or active thread")
+
+        effective_options = CodexOptions.merge(self.options, options)
+        client = await self._get_client()
+        response = await _thread_fork_with_options(
+            client,
+            thread_id=source_thread_id,
+            options=effective_options,
+            ephemeral=ephemeral,
+        )
+        self._activate_thread(
+            thread_id=response.thread.id,
+            thread_status=response.thread.status,
+            thread_options=options,
+        )
+        return response.thread.id
 
     async def query(
         self,
-        prompt: str | list[object],
+        prompt: TurnInputLike,
         *,
         options: CodexOptions | None = None,
         output_schema: dict[str, object] | None = None,
     ) -> TurnHandle:
         """Start a turn on the active thread and return its handle."""
 
-        raise NotImplementedError("High-level turn queries are not implemented yet.")
+        self._clear_finished_active_turn()
+        if self.thread_id is None:
+            await self._start_thread_for_first_query(options)
+        self._raise_if_turn_in_progress("start a new turn")
+
+        thread_id = self._require_thread_id(method="query")
+        effective_options = CodexOptions.merge(self.options, self._thread_options, options)
+        client = await self._get_client()
+        notification_subscription = client.subscribe_thread_notifications(thread_id)
+        server_request_subscription = client.subscribe_thread_server_requests(thread_id)
+
+        try:
+            turn_response = await _turn_start_with_options(
+                client,
+                thread_id=thread_id,
+                input=prompt,
+                options=effective_options,
+                output_schema=output_schema,
+            )
+        except BaseException:
+            notification_subscription.close()
+            server_request_subscription.close()
+            raise
+
+        turn_id = turn_response.turn.id
+        self.active_turn_id = turn_id
+        stream = _ManagedTurnStream(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            completion_future=asyncio.get_running_loop().create_future(),
+        )
+        stream.pump_task = asyncio.create_task(
+            self._pump_turn_stream(
+                stream=stream,
+                client=client,
+                notification_subscription=notification_subscription,
+                server_request_subscription=server_request_subscription,
+            ),
+            name=f"codex-agent-sdk.turn-stream:{turn_id}",
+        )
+        self._turn_streams[turn_id] = stream
+
+        return TurnHandle(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            event_iterator=stream.subscribe(),
+            waiter=lambda: _await_turn_result(stream.completion_future),
+            steerer=lambda next_prompt: self.steer(
+                cast(TurnInputLike, next_prompt),
+                expected_turn_id=turn_id,
+            ),
+            interrupter=lambda: self.interrupt(turn_id=turn_id),
+        )
 
     async def steer(
         self,
-        prompt: str | list[object],
+        prompt: TurnInputLike,
         *,
         expected_turn_id: str | None = None,
     ) -> str:
         """Append steering input to the active turn."""
 
-        raise NotImplementedError("Turn steering is not implemented yet.")
+        self._clear_finished_active_turn()
+        thread_id = self._require_thread_id(method="turn/steer")
+        turn_id = expected_turn_id or self.active_turn_id
+        if turn_id is None:
+            raise ClientStateError("steer() requires an expected_turn_id or active turn")
+
+        client = await self._get_client()
+        response = await client.turn_steer(
+            thread_id=thread_id,
+            expected_turn_id=turn_id,
+            input=prompt,
+        )
+        self.active_turn_id = response.turn_id
+        return response.turn_id
 
     async def interrupt(
         self,
@@ -997,7 +1197,27 @@ class CodexSDKClient:
     ) -> None:
         """Interrupt the active turn or a specified turn."""
 
-        raise NotImplementedError("Turn interruption is not implemented yet.")
+        self._clear_finished_active_turn()
+        thread_id = self._require_thread_id(method="turn/interrupt")
+        target_turn_id = turn_id or self.active_turn_id
+        if target_turn_id is None:
+            raise ClientStateError("interrupt() requires a turn_id or active turn")
+
+        client = await self._get_client()
+        await client.turn_interrupt(
+            thread_id=thread_id,
+            turn_id=target_turn_id,
+        )
+
+    async def respond_approval_request(
+        self,
+        request: ApprovalRequest | str | int | None,
+        decision: ApprovalDecision,
+    ) -> None:
+        """Send a typed approval decision for one pending approval request."""
+
+        client = await self._get_client()
+        await client.respond_approval_request(request, decision)
 
     def receive_turn_events(
         self,
@@ -1006,7 +1226,20 @@ class CodexSDKClient:
     ) -> AsyncIterator[TurnEvent]:
         """Return the canonical event stream for a turn."""
 
-        raise NotImplementedError("Turn event streaming is not implemented yet.")
+        self._clear_finished_active_turn()
+        target_turn_id = turn_id or self.active_turn_id
+        if target_turn_id is None:
+            raise ClientStateError("receive_turn_events() requires a turn_id or active turn")
+
+        stream = self._turn_streams.get(target_turn_id)
+        if stream is not None:
+            return stream.subscribe()
+
+        thread_id = self._require_thread_id(method="turn event stream")
+        return self._iter_existing_turn_events(
+            thread_id=thread_id,
+            turn_id=target_turn_id,
+        )
 
     def receive_response(
         self,
@@ -1016,6 +1249,140 @@ class CodexSDKClient:
         """Compatibility alias for ``receive_turn_events()``."""
 
         return self.receive_turn_events(turn_id=turn_id)
+
+    async def _get_client(self) -> AppServerClient:
+        async with self._client_lock:
+            client = self._app_client
+            if client is None:
+                client = AppServerClient(self.app_server)
+                self._app_client = client
+
+            client.set_approval_handler(self.approval_handler)
+            if not client.is_initialized:
+                try:
+                    await client.initialize()
+                except BaseException:
+                    if self._app_client is client:
+                        self._app_client = None
+                    raise
+            return client
+
+    def _activate_thread(
+        self,
+        *,
+        thread_id: str,
+        thread_status: object,
+        thread_options: CodexOptions | None,
+    ) -> None:
+        self.thread_id = thread_id
+        self.thread_status = _normalize_thread_status_payload(thread_status)
+        self.active_turn_id = None
+        self._thread_options = thread_options
+
+    async def _start_thread_for_first_query(self, options: CodexOptions | None) -> None:
+        effective_options = CodexOptions.merge(self.options, options)
+        client = await self._get_client()
+        response = await _thread_start_with_options(
+            client,
+            effective_options,
+            ephemeral=False,
+        )
+        self._activate_thread(
+            thread_id=response.thread.id,
+            thread_status=response.thread.status,
+            thread_options=None,
+        )
+
+    def _clear_finished_active_turn(self) -> None:
+        if self.active_turn_id is None:
+            return
+        stream = self._turn_streams.get(self.active_turn_id)
+        if stream is not None and stream.completion_future.done():
+            self.active_turn_id = None
+
+    def _raise_if_turn_in_progress(self, action: str) -> None:
+        self._clear_finished_active_turn()
+        if self.active_turn_id is None:
+            return
+
+        stream = self._turn_streams.get(self.active_turn_id)
+        if stream is None or stream.completion_future.done():
+            self.active_turn_id = None
+            return
+
+        raise ClientStateError(
+            f"cannot {action} while active turn_id={self.active_turn_id!r} is still running"
+        )
+
+    def _require_thread_id(self, *, method: str) -> str:
+        if self.thread_id is None:
+            raise ClientStateError(f"{method} requires an active thread")
+        return self.thread_id
+
+    async def _pump_turn_stream(
+        self,
+        *,
+        stream: _ManagedTurnStream,
+        client: AppServerClient,
+        notification_subscription: JsonRpcNotificationSubscription,
+        server_request_subscription: JsonRpcServerRequestSubscription,
+    ) -> None:
+        try:
+            async for event in _stream_turn_events(
+                client,
+                turn_id=stream.turn_id,
+                notifications=notification_subscription.iter_notifications(),
+                notification_subscription=notification_subscription,
+                server_requests=server_request_subscription.iter_requests(),
+                server_request_subscription=server_request_subscription,
+                close_message=(
+                    "app-server connection closed before high-level turn stream completed "
+                    f"for turn_id={stream.turn_id!r}"
+                ),
+            ):
+                self._observe_turn_event(event)
+                stream.publish(event)
+                if isinstance(event, TurnCompletedEvent):
+                    if event.result is None:
+                        raise ClientStateError("turn completion event did not include a result")
+                    if not stream.completion_future.done():
+                        stream.completion_future.set_result(event.result)
+                    return
+        except asyncio.CancelledError:
+            if not stream.completion_future.done():
+                stream.completion_future.cancel()
+            raise
+        except BaseException as exc:
+            if not stream.completion_future.done():
+                stream.completion_future.set_exception(exc)
+            stream.fail(exc)
+        finally:
+            if stream._terminal_exception is None:
+                stream.close()
+            if self.active_turn_id == stream.turn_id:
+                self.active_turn_id = None
+            self._turn_streams.pop(stream.turn_id, None)
+
+    def _observe_turn_event(self, event: TurnEvent) -> None:
+        if isinstance(event, ThreadStatusChangedEvent) and event.thread_id == self.thread_id:
+            self.thread_status = event.thread_status
+            return
+        if isinstance(event, TurnStartedEvent):
+            self.active_turn_id = event.turn_id
+            return
+        if isinstance(event, TurnCompletedEvent) and event.turn_id == self.active_turn_id:
+            self.active_turn_id = None
+
+    async def _iter_existing_turn_events(
+        self,
+        *,
+        thread_id: str,
+        turn_id: str,
+    ) -> AsyncIterator[TurnEvent]:
+        client = await self._get_client()
+        async for event in client.iter_turn_events(thread_id=thread_id, turn_id=turn_id):
+            self._observe_turn_event(event)
+            yield event
 
 
 __all__ = [
@@ -1246,6 +1613,118 @@ def _remaining_startup_timeout(
         command=StdioTransport.build_command(config),
         cwd=config.cwd,
     )
+
+
+async def _await_turn_result(result: asyncio.Future[TurnResult]) -> TurnResult:
+    return await asyncio.shield(result)
+
+
+async def _thread_start_with_options(
+    client: AppServerClient,
+    options: CodexOptions,
+    *,
+    ephemeral: bool,
+) -> ThreadStartResponse:
+    return await client.thread_start(
+        approval_policy=options.approval_policy,
+        approvals_reviewer=options.approvals_reviewer,
+        base_instructions=options.base_instructions,
+        cwd=options.cwd,
+        developer_instructions=options.developer_instructions,
+        ephemeral=ephemeral,
+        model=options.model,
+        personality=options.personality,
+        sandbox=options.effective_sandbox_mode,
+        service_tier=options.service_tier,
+    )
+
+
+async def _thread_resume_with_options(
+    client: AppServerClient,
+    *,
+    thread_id: str,
+    options: CodexOptions,
+) -> ThreadResumeResponse:
+    return await client.thread_resume(
+        thread_id=thread_id,
+        approval_policy=options.approval_policy,
+        approvals_reviewer=options.approvals_reviewer,
+        base_instructions=options.base_instructions,
+        cwd=options.cwd,
+        developer_instructions=options.developer_instructions,
+        model=options.model,
+        personality=options.personality,
+        sandbox=options.effective_sandbox_mode,
+        service_tier=options.service_tier,
+    )
+
+
+async def _thread_fork_with_options(
+    client: AppServerClient,
+    *,
+    thread_id: str,
+    options: CodexOptions,
+    ephemeral: bool,
+) -> ThreadForkResponse:
+    return await client.thread_fork(
+        thread_id=thread_id,
+        approval_policy=options.approval_policy,
+        approvals_reviewer=options.approvals_reviewer,
+        base_instructions=options.base_instructions,
+        cwd=options.cwd,
+        developer_instructions=options.developer_instructions,
+        ephemeral=ephemeral,
+        model=options.model,
+        sandbox=options.effective_sandbox_mode,
+        service_tier=options.service_tier,
+    )
+
+
+async def _turn_start_with_options(
+    client: AppServerClient,
+    *,
+    thread_id: str,
+    input: TurnInputLike,
+    options: CodexOptions,
+    output_schema: Mapping[str, object] | None,
+) -> TurnStartResponse:
+    return await client.turn_start(
+        thread_id=thread_id,
+        input=input,
+        approval_policy=options.approval_policy,
+        approvals_reviewer=options.approvals_reviewer,
+        cwd=options.cwd,
+        effort=options.effort,
+        model=options.model,
+        output_schema=output_schema,
+        personality=options.personality,
+        sandbox_policy=options.effective_sandbox_policy,
+        service_tier=options.service_tier,
+        summary=options.summary,
+    )
+
+
+def _normalize_thread_status_payload(status: object) -> str | None:
+    raw_status = getattr(status, "root", status)
+    raw_type = getattr(raw_status, "type", None)
+
+    if raw_type == "notLoaded":
+        return "not_loaded"
+    if raw_type == "systemError":
+        return "system_error"
+    if isinstance(raw_type, str):
+        return raw_type
+
+    if isinstance(status, Mapping):
+        mapped_type = status.get("type")
+        if mapped_type == "notLoaded":
+            return "not_loaded"
+        if mapped_type == "systemError":
+            return "system_error"
+        if isinstance(mapped_type, str):
+            return mapped_type
+
+    return None
 
 
 def _coerce_turn_input_items(input: TurnInputLike) -> list[UserInput]:

@@ -17,8 +17,8 @@ can evolve independently.
 - `src/codex_agent_sdk/protocol/`
   contains handwritten adapters, registries, and helpers layered on top of the
   generated models.
-- `src/codex_agent_sdk/client.py`, `query.py`, `events.py`, `approvals.py`,
-  `results.py`, `options.py`, `errors.py`, and `retry.py`
+- `src/codex_agent_sdk/client.py`, `sync_client.py`, `query.py`, `events.py`,
+  `approvals.py`, `results.py`, `options.py`, `errors.py`, and `retry.py`
   make up the public SDK surface and stable support modules.
 - `src/codex_agent_sdk/testing/`
   contains fake app-server helpers and other SDK-specific test support code.

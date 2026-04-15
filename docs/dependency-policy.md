@@ -8,6 +8,9 @@ uses `uv` as the only supported dependency manager.
   the Python standard library.
 - The repo does not introduce `anyio`, Trio, HTTP client wrappers, or generic
   async abstraction layers.
+- The synchronous `SyncCodexSDKClient` is still built on top of `asyncio`; it
+  runs the async client on a private background event loop thread instead of
+  adding a second runtime stack or new dependency.
 - Code generation tooling is isolated from day-to-day development so end users
   do not pay for maintainer-only tools.
 

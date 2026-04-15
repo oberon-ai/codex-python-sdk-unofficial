@@ -1,15 +1,17 @@
 # Unofficial Codex Python SDK (`codex-agent-sdk-unofficial`)
 
-Unofficial, native-async Python SDK for the Codex app-server protocol.
+Unofficial Python SDK for the Codex app-server protocol.
 
 The package launches `codex app-server --listen stdio://`, speaks JSON-RPC v2
 over stdio, and keeps Codex concepts such as threads, turns, items, and
 approval requests visible in the Python API.
 
-Status: preview. The low-level `AppServerClient` and the one-shot `query()`
-helper are usable today. `CodexSDKClient` is exported as the intended
-stateful-thread entry point, but its high-level workflow helpers are not fully
-implemented yet.
+Status: preview. The low-level `AppServerClient`, the one-shot async `query()`
+helper, the stateful async `CodexSDKClient`, and the synchronous
+`SyncCodexSDKClient` wrapper are all usable today. The sync client runs the
+async client on a private event loop thread, so it is convenient for
+synchronous call sites but less natural than using the native async APIs
+directly.
 
 ## Highlights
 
@@ -20,6 +22,8 @@ implemented yet.
 - First-class approval helpers built around `ApprovalRequest` and
   `ApprovalDecision`.
 - A small `query()` helper for single-turn scripts and automation jobs.
+- A stateful `CodexSDKClient` for higher-level async thread workflows.
+- A `SyncCodexSDKClient` wrapper for synchronous Python.
 - A lower-level `AppServerClient` for full control over thread and turn
   lifecycle calls.
 
@@ -49,7 +53,8 @@ uv sync --no-dev
 
 ## Quick Start
 
-Use `query()` when you want one turn, an ephemeral thread, and streamed events:
+Use `query()` when you want one turn, an ephemeral thread, and streamed events
+from async code:
 
 ```python
 import asyncio
@@ -75,8 +80,33 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-Drop down to `AppServerClient` when you need explicit control over app-server
-requests:
+Use `SyncCodexSDKClient` when you need synchronous Python. It wraps the async
+client on a private background loop, so it is practical for non-async scripts
+but still not as natural as the native async surface:
+
+```python
+from codex_agent_sdk import AgentTextDeltaEvent, CodexOptions, SyncCodexSDKClient
+
+
+with SyncCodexSDKClient(
+    options=CodexOptions(
+        cwd=".",
+        approval_policy="never",
+        model="gpt-5.4",
+    )
+) as client:
+    turn = client.query("Summarize the purpose of this repository.")
+    for event in turn:
+        if isinstance(event, AgentTextDeltaEvent):
+            print(event.text_delta, end="", flush=True)
+
+    result = turn.wait()
+    print(f"\n\nturn status: {result.status}")
+```
+
+Use `CodexSDKClient` when you want a long-lived async client that manages an
+active thread across multiple turns. Drop down to `AppServerClient` when you
+need explicit control over app-server requests:
 
 ```python
 import asyncio

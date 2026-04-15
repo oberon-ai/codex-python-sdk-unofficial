@@ -67,8 +67,9 @@ class DocumentationCleanupTests(unittest.TestCase):
         self.assertIn("query()", content)
         self.assertIn("AppServerClient", content)
         self.assertIn("CodexSDKClient", content)
-        self.assertIn("not fully", lowered)
-        self.assertIn("implemented yet", lowered)
+        self.assertIn("SyncCodexSDKClient", content)
+        self.assertIn("private event loop thread", lowered)
+        self.assertIn("less natural", lowered)
 
 
 if __name__ == "__main__":

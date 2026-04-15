@@ -5,10 +5,15 @@ points:
 
 - `query(..., options=...)`
 - `CodexSDKClient(options=...)`
+- `SyncCodexSDKClient(options=...)`
 - `CodexSDKClient.start_thread(..., options=...)`
 - `CodexSDKClient.resume_thread(..., options=...)`
 - `CodexSDKClient.fork_thread(..., options=...)`
 - `CodexSDKClient.query(..., options=...)`
+- `SyncCodexSDKClient.start_thread(..., options=...)`
+- `SyncCodexSDKClient.resume_thread(..., options=...)`
+- `SyncCodexSDKClient.fork_thread(..., options=...)`
+- `SyncCodexSDKClient.query(..., options=...)`
 
 It is deliberately separate from `AppServerConfig`.
 
@@ -164,7 +169,7 @@ support.
 Client defaults:
 
 ```python
-from codex_agent_sdk import CodexOptions, CodexSDKClient
+from codex_agent_sdk import CodexOptions, CodexSDKClient, SyncCodexSDKClient
 
 defaults = CodexOptions(
     model="gpt-5.4",
@@ -177,6 +182,7 @@ defaults = CodexOptions(
 )
 
 client = CodexSDKClient(options=defaults)
+sync_client = SyncCodexSDKClient(options=defaults)
 ```
 
 Thread defaults layered over client defaults:

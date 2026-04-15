@@ -11,6 +11,7 @@ class PackageLayoutTests(unittest.TestCase):
     def test_expected_modules_are_importable(self) -> None:
         modules = [
             "codex_agent_sdk.client",
+            "codex_agent_sdk.sync_client",
             "codex_agent_sdk.query",
             "codex_agent_sdk.events",
             "codex_agent_sdk.approvals",

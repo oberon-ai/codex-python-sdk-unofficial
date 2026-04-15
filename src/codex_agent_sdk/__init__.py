@@ -4,6 +4,8 @@ Happy-path imports should come from this module:
 
 - ``query()`` for one-shot scripted use
 - ``CodexSDKClient`` for stateful thread workflows
+- ``SyncCodexSDKClient`` for synchronous call sites that need a wrapper over
+  the async client
 - ``AppServerClient`` for low-level JSON-RPC access
 - ``retry_on_overload()`` for opt-in overload backoff on safe operations
 - ``CodexOptions`` and ``AppServerConfig`` for configuration
@@ -113,6 +115,7 @@ from .retry import (
     OverloadRetryPolicy,
     retry_on_overload,
 )
+from .sync_client import SyncCodexSDKClient, SyncTurnHandle
 
 __all__ = [
     "ApprovalDecision",
@@ -177,6 +180,8 @@ __all__ = [
     "ServerRequestStateError",
     "ShutdownError",
     "ShutdownTimeoutError",
+    "SyncCodexSDKClient",
+    "SyncTurnHandle",
     "StartupError",
     "StartupTimeoutError",
     "ThreadStatusChangedEvent",

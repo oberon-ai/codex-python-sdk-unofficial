@@ -1,25 +1,32 @@
 # API Overview
 
-The SDK exposes three primary entry points:
+The SDK exposes four primary entry points:
 
 - `query()`
-  for one-shot, single-turn workflows on an ephemeral thread.
+  for one-shot, single-turn async workflows on an ephemeral thread.
 - `AppServerClient`
   for direct access to the app-server JSON-RPC surface.
 - `CodexSDKClient`
-  for the intended long-lived thread-oriented client API.
+  for long-lived async thread-oriented workflows.
+- `SyncCodexSDKClient`
+  for synchronous Python that needs a wrapper over `CodexSDKClient`.
 
-`query()` and `AppServerClient` are the fully usable paths today.
-`CodexSDKClient` is still preview API: the class and its intended methods are
-exported, but the high-level thread lifecycle helpers are not fully implemented
-yet.
+The sync surface is intentionally a wrapper, not a second transport stack. It
+uses a private background `asyncio` loop and yields the same typed turn-event
+objects as the async APIs.
 
 ## Recommended Imports
 
 Import from the root package for the normal user path:
 
 ```python
-from codex_agent_sdk import AppServerClient, AppServerConfig, CodexOptions, query
+from codex_agent_sdk import (
+    AppServerClient,
+    AppServerConfig,
+    CodexOptions,
+    SyncCodexSDKClient,
+    query,
+)
 ```
 
 Direct imports from `codex_agent_sdk.options`, `codex_agent_sdk.errors`, and
@@ -89,17 +96,79 @@ access to the wire protocol surface.
 
 ## `CodexSDKClient`
 
-`CodexSDKClient` defines the intended stateful client surface for long-lived
-thread workflows. The exported class tracks `thread_id`, `active_turn_id`, and
-`thread_status`, and its public methods document the shape of the future
-high-level API.
+`CodexSDKClient` is the stateful async client for long-lived thread workflows.
+It tracks:
 
-At the moment, methods such as `start_thread()`, `resume_thread()`,
-`fork_thread()`, `query()`, `steer()`, `interrupt()`, and
-`receive_turn_events()` still raise `NotImplementedError`.
+- `thread_id`
+- `active_turn_id`
+- `thread_status`
 
-That status is deliberate and should be called out in downstream docs and
-examples rather than hidden.
+Its main responsibilities are:
+
+- `start_thread()`, `resume_thread()`, and `fork_thread()`
+- `query()` returning a streamed `TurnHandle`
+- `steer()` and `interrupt()`
+- `receive_turn_events()` and `receive_response()`
+- `respond_approval_request()` for manual approval flows
+
+`query()` starts a new thread automatically on first use when no active thread
+exists yet. Explicit thread lifecycle methods are still the better fit when you
+need to choose between start, resume, or fork yourself.
+
+The returned `TurnHandle` preserves the streamed event surface while also
+adding:
+
+- `wait()`
+- `steer()`
+- `interrupt()`
+
+Those helpers are all async because the client itself is native `asyncio`.
+
+## `SyncCodexSDKClient`
+
+`SyncCodexSDKClient` wraps `CodexSDKClient` for synchronous Python. It mirrors
+the same high-level methods:
+
+- `start_thread()`
+- `resume_thread()`
+- `fork_thread()`
+- `query()`
+- `steer()`
+- `interrupt()`
+- `receive_turn_events()`
+- `respond_approval_request()`
+
+The sync client is practical when your application cannot expose an async API,
+but it is still a wrapper over the async implementation. That means:
+
+- prefer `query()`, `CodexSDKClient`, or `AppServerClient` when your host
+  application is already async
+- inline approval responses are less natural on the sync path because the raw
+  streamed approval events still carry async helpers; use a sync
+  `approval_handler` callback when possible, or call
+  `SyncCodexSDKClient.respond_approval_request(...)` yourself
+
+Example:
+
+```python
+from codex_agent_sdk import AgentTextDeltaEvent, CodexOptions, SyncCodexSDKClient
+
+
+with SyncCodexSDKClient(
+    options=CodexOptions(
+        cwd=".",
+        approval_policy="never",
+        model="gpt-5.4",
+    )
+) as client:
+    turn = client.query("Summarize the important modules in this repository.")
+    for event in turn:
+        if isinstance(event, AgentTextDeltaEvent):
+            print(event.text_delta, end="", flush=True)
+
+    result = turn.wait()
+    print(result.status)
+```
 
 ## Streaming Events
 
