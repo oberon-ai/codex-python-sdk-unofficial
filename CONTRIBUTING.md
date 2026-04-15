@@ -79,6 +79,13 @@ uv run ruff format --check .
 uv build
 ```
 
+If you are changing the upstream-tracking automation itself, also run the
+tracker-focused tests:
+
+```bash
+uv run pytest tests/test_version_tracker.py -q
+```
+
 ## Examples And Documentation
 
 If you change the public API, contributor workflow, or user-visible behavior,
@@ -158,6 +165,40 @@ uv run --group codegen python scripts/generate_protocol_models.py --check
 uv run pytest tests/test_codegen_regressions.py -q
 ```
 
+## Automated Upstream Tracking
+
+The repository has a scheduled GitHub Actions workflow at
+`.github/workflows/version-tracker.yml` that keeps this checkout aligned with
+`openai/codex`.
+
+The automation is split across:
+
+- `src/codex_meta_agent/`
+  the Python orchestration package
+- `.github/codex-upstream-state.json`
+  the committed record of the last upstream main commit and stable release tag
+- `.github/workflows/version-tracker.yml`
+  the daily and manual trigger that runs the tracker, commits changes to
+  `main`, and publishes releases
+
+The tracker uses `SyncCodexSDKClient` so the maintenance job exercises the SDK
+itself rather than bypassing it with a separate automation stack.
+
+Useful local commands:
+
+```bash
+uv run python -m codex_meta_agent --dry-run
+uv run python -m codex_meta_agent --skip-verification
+```
+
+The workflow assumes:
+
+- GitHub Actions is allowed to push back to `main`
+- `OPENAI_API_KEY` is available to the runner
+- the tracked release tags in this repository are prefixed as
+  `upstream-<upstream-tag>` so they do not collide with any future project
+  versioning scheme
+
 ## Dependency Changes
 
 Use `uv` as the only supported dependency manager for this repository.
@@ -179,6 +220,7 @@ make code changes:
 - keep subprocess and stdio transport concerns in `transport/`
 - keep JSON-RPC envelopes, routing, and request correlation in `rpc/`
 - keep generated wire artifacts isolated in `generated/`
+- keep repository-tracking automation in `src/codex_meta_agent/`
 - keep handwritten protocol adapters and registries in `protocol/`
 - keep the public SDK surface in `client.py`, `query.py`, `events.py`,
   `approvals.py`, `results.py`, `options.py`, `errors.py`, and `retry.py`

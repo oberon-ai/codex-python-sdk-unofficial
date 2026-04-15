@@ -27,6 +27,9 @@ SDK.
   covers the checked-in schema snapshots and refresh process.
 - [Protocol model code generation](protocol-model-codegen.md)
   covers the generated Python artifacts and regeneration checks.
+- [Upstream tracking automation](upstream-tracking.md)
+  covers the scheduled GitHub Actions workflow, committed upstream state file,
+  and release-tagging policy.
 - [Scripts guide](../scripts/README.md)
   summarizes the repository maintenance scripts.
 

@@ -34,13 +34,19 @@ class ProjectConfigurationTests(unittest.TestCase):
         tool_uv = PYPROJECT_DATA["tool"]["uv"]
 
         self.assertEqual(tool_uv["default-groups"], ["dev"])
-        self.assertEqual(tool_uv["build-backend"]["module-name"], "codex_agent_sdk")
+        self.assertEqual(
+            tool_uv["build-backend"]["module-name"],
+            ["codex_agent_sdk", "codex_meta_agent"],
+        )
 
     def test_quality_tools_preserve_generated_code_boundary(self) -> None:
         ruff = PYPROJECT_DATA["tool"]["ruff"]
         mypy = PYPROJECT_DATA["tool"]["mypy"]
+        isort = ruff["lint"]["isort"]
 
         self.assertIn("src/codex_agent_sdk/generated", ruff["extend-exclude"])
+        self.assertIn("codex_agent_sdk", isort["known-first-party"])
+        self.assertIn("codex_meta_agent", isort["known-first-party"])
         self.assertEqual(mypy["exclude"], "^src/codex_agent_sdk/generated/")
 
     def test_pytest_and_type_marker_exist(self) -> None:

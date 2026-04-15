@@ -31,7 +31,7 @@ codegen = ["datamodel-code-generator>=0.56,<0.57"]
 default-groups = ["dev"]
 
 [tool.uv.build-backend]
-module-name = "codex_agent_sdk"
+module-name = ["codex_agent_sdk", "codex_meta_agent"]
 
 [tool.pytest.ini_options]
 addopts = ["-ra"]
@@ -46,7 +46,7 @@ extend-exclude = ["src/codex_agent_sdk/generated"]
 select = ["B", "E", "F", "I", "UP"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["codex_agent_sdk"]
+known-first-party = ["codex_agent_sdk", "codex_meta_agent"]
 
 [tool.mypy]
 python_version = "3.11"

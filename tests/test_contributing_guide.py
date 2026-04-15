@@ -19,6 +19,7 @@ class ContributingGuideTests(unittest.TestCase):
             "## Examples And Documentation",
             "## Schema Snapshot Workflow",
             "## Protocol Model Generation",
+            "## Automated Upstream Tracking",
             "## Dependency Changes",
             "## Design Boundaries",
             "## Pull Request Checklist",
@@ -43,6 +44,7 @@ class ContributingGuideTests(unittest.TestCase):
             "uv run python scripts/vendor_protocol_schema.py --check",
             "uv run python scripts/vendor_protocol_schema.py --allow-version-change",
             "uv run --group codegen python scripts/generate_protocol_models.py --check",
+            "uv run python -m codex_meta_agent --dry-run",
         ]
 
         for command in expected_commands:
@@ -59,6 +61,7 @@ class ContributingGuideTests(unittest.TestCase):
             "protocol/",
             "generated/",
             "codex_agent_sdk",
+            "src/codex_meta_agent/",
             "uv.lock",
             "requirements/*.txt",
         ]

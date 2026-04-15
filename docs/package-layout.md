@@ -9,6 +9,9 @@ can evolve independently.
 - `src/codex_agent_sdk/transport/`
   owns subprocess lifecycle, stdio wiring, stderr capture, and newline-delimited
   JSON framing.
+- `src/codex_meta_agent/`
+  owns the repository-maintenance automation that tracks `openai/codex`,
+  prepares branch-sync prompts, and emits release metadata on top of the SDK.
 - `src/codex_agent_sdk/rpc/`
   owns JSON-RPC envelopes, request correlation, subscriptions, and server-request
   routing.
@@ -35,6 +38,9 @@ can evolve independently.
   contains runnable example programs for the public API.
 - `scripts/`
   contains repository maintenance entry points.
+- `.github/`
+  contains the committed upstream tracking state plus the scheduled release and
+  branch-sync workflow.
 - `docs/`
   contains user-facing and maintainer-facing Markdown documentation.
 
@@ -70,6 +76,8 @@ rules.
 ## Contributor Rules
 
 - Keep generated code isolated under `src/codex_agent_sdk/generated/`.
+- Keep repository automation under `src/codex_meta_agent/` instead of mixing it
+  into the SDK runtime modules.
 - Keep transport concerns in `transport/`, not in public convenience helpers.
 - Keep JSON-RPC request and routing concerns in `rpc/`, not in `client.py`.
 - Prefer thin handwritten adapters on top of generated models instead of

@@ -16,6 +16,7 @@ PUBLIC_DOCS = [
     REPO_ROOT / "docs" / "protocol-model-codegen.md",
     REPO_ROOT / "docs" / "public-import-policy.md",
     REPO_ROOT / "docs" / "schema-vendoring.md",
+    REPO_ROOT / "docs" / "upstream-tracking.md",
     REPO_ROOT / "examples" / "README.md",
     REPO_ROOT / "scripts" / "README.md",
     REPO_ROOT / "src" / "codex_agent_sdk" / "generated" / "README.md",
@@ -70,6 +71,7 @@ class DocumentationCleanupTests(unittest.TestCase):
         self.assertIn("SyncCodexSDKClient", content)
         self.assertIn("private event loop thread", lowered)
         self.assertIn("less natural", lowered)
+        self.assertIn("upstream-tracking.md", content)
 
 
 if __name__ == "__main__":

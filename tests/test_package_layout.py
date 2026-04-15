@@ -10,6 +10,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 class PackageLayoutTests(unittest.TestCase):
     def test_expected_modules_are_importable(self) -> None:
         modules = [
+            "codex_meta_agent",
+            "codex_meta_agent.version_tracker",
             "codex_agent_sdk.client",
             "codex_agent_sdk.sync_client",
             "codex_agent_sdk.query",
@@ -55,9 +57,11 @@ class PackageLayoutTests(unittest.TestCase):
             REPO_ROOT / "docs" / "README.md",
             REPO_ROOT / "docs" / "api.md",
             REPO_ROOT / "docs" / "package-layout.md",
+            REPO_ROOT / "docs" / "upstream-tracking.md",
             REPO_ROOT / "docs" / "codex-options.md",
             REPO_ROOT / "examples" / "README.md",
             REPO_ROOT / "scripts" / "README.md",
+            REPO_ROOT / ".github" / "workflows" / "version-tracker.yml",
         ]
 
         for path in expected_files:
@@ -70,6 +74,7 @@ class PackageLayoutTests(unittest.TestCase):
         self.assertIn("transport", content)
         self.assertIn("rpc", content)
         self.assertIn("generated", content)
+        self.assertIn("codex_meta_agent", content)
         self.assertIn("public SDK surface", content)
         self.assertIn("testing", content)
 
@@ -81,6 +86,7 @@ class PackageLayoutTests(unittest.TestCase):
         self.assertIn("package-layout.md", content)
         self.assertIn("schema-vendoring.md", content)
         self.assertIn("protocol-model-codegen.md", content)
+        self.assertIn("upstream-tracking.md", content)
 
 
 if __name__ == "__main__":

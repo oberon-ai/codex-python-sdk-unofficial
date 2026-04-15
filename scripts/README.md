@@ -3,6 +3,11 @@
 This directory contains the repository maintenance entry points used to keep
 the vendored schema snapshots and generated protocol artifacts in sync.
 
+The scheduled upstream branch and release tracker is not implemented as a file
+in this directory. It lives under `src/codex_meta_agent/` and is documented in
+`docs/upstream-tracking.md` because it is a first-class package that uses the
+SDK itself.
+
 ## `vendor_protocol_schema.py`
 
 Refreshes or verifies the checked-in stable and experimental schema snapshots

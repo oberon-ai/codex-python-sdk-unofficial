@@ -26,6 +26,8 @@ directly.
 - A `SyncCodexSDKClient` wrapper for synchronous Python.
 - A lower-level `AppServerClient` for full control over thread and turn
   lifecycle calls.
+- A scheduled meta-agent workflow that uses this SDK to track
+  `openai/codex` branch and release drift.
 
 ## Requirements
 
@@ -156,6 +158,7 @@ options.
 - [Public import policy](docs/public-import-policy.md)
 - [Schema vendoring](docs/schema-vendoring.md)
 - [Protocol model code generation](docs/protocol-model-codegen.md)
+- [Upstream tracking automation](docs/upstream-tracking.md)
 - [Dependency policy](docs/dependency-policy.md)
 - [Contributing](CONTRIBUTING.md)
 
@@ -173,6 +176,26 @@ uv build
 
 Contributor setup, code generation, and schema refresh workflows are documented
 in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Automated Upstream Tracking
+
+This repository now ships a daily GitHub Actions workflow at
+`.github/workflows/version-tracker.yml`.
+
+The workflow:
+
+- checks `openai/codex` `main` every day and on manual dispatch
+- compares the live upstream branch head and stable release tag against the
+  committed `.github/codex-upstream-state.json`
+- uses `python -m codex_meta_agent` plus `SyncCodexSDKClient` to let Codex
+  reconcile local code, docs, tests, and release metadata
+- runs the repository verification commands
+- commits branch-sync changes back to `main`
+- publishes a GitHub release tagged as `upstream-<upstream-tag>` when the
+  latest upstream stable release changes
+
+See [docs/upstream-tracking.md](docs/upstream-tracking.md) for the detailed
+workflow contract, local dry-run command, and required GitHub Actions secrets.
 
 ## Project Notes
 
