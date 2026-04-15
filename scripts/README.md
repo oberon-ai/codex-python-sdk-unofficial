@@ -1,28 +1,45 @@
 # Scripts
 
-This directory is reserved for repository maintenance scripts.
+This directory contains the repository maintenance entry points used to keep
+the vendored schema snapshots and generated protocol artifacts in sync.
 
-Expected future uses include:
+## `vendor_protocol_schema.py`
 
-- updating vendored or generated protocol artifacts
-- verification helpers for schema drift
-- release automation and packaging support
+Refreshes or verifies the checked-in stable and experimental schema snapshots
+under `tests/fixtures/schema_snapshots/` and updates
+`tests/fixtures/schema_snapshots/vendor_manifest.json`.
 
-Current maintenance entrypoint:
+Common commands:
 
-- `vendor_protocol_schema.py`
-  - Regenerates the pinned stable and experimental schema snapshots under
-    `tests/fixtures/schema_snapshots/` and updates
-    `tests/fixtures/schema_snapshots/vendor_manifest.json`.
-- `generate_protocol_models.py`
-  - Regenerates or verifies the checked-in stable Pydantic wire models at
-    `src/codex_agent_sdk/generated/stable.py`, the derived stable
-    notification registry at
-    `src/codex_agent_sdk/generated/stable_notification_registry.py`, and the
-    derived stable server-request registry at
-    `src/codex_agent_sdk/generated/stable_server_request_registry.py` from the
-    pinned stable schema snapshot plus the repo's upstream-backed
-    server-request method inventory.
-  - Enforces the repo convention that generated `BaseModel` classes use
-    snake_case Python field names while preserving upstream wire aliases for
-    validation and default serialization.
+```bash
+uv run python scripts/vendor_protocol_schema.py --check
+uv run python scripts/vendor_protocol_schema.py
+uv run python scripts/vendor_protocol_schema.py --allow-version-change
+```
+
+## `generate_protocol_models.py`
+
+Regenerates or verifies the checked-in stable Pydantic protocol models and the
+derived notification and server-request registries.
+
+Outputs:
+
+- `src/codex_agent_sdk/generated/stable.py`
+- `src/codex_agent_sdk/generated/stable_notification_registry.py`
+- `src/codex_agent_sdk/generated/stable_server_request_registry.py`
+
+Common commands:
+
+```bash
+uv sync --group codegen
+uv run --group codegen python scripts/generate_protocol_models.py
+uv run --group codegen python scripts/generate_protocol_models.py --check
+```
+
+## Working Rules
+
+- Do not hand-edit files under `src/codex_agent_sdk/generated/`.
+- Refresh schema snapshots before regenerating Python artifacts when upstream
+  protocol inputs change.
+- Review generated diffs intentionally; these scripts are part of the
+  compatibility boundary for the SDK.

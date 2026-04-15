@@ -1,37 +1,37 @@
 # Public Import Policy
 
-This repository keeps a deliberate split between the public SDK surface and the
-lower-level implementation layers that will power it.
+This repository keeps a clear split between the stable import surface and the
+lower-level implementation layers that support it.
 
-## Root package is authoritative
+## Root Package Is Authoritative
 
-The supported import path for end users is the root package:
+The primary import path for end users is the root package:
 
 ```python
-from codex_agent_sdk import CodexOptions, CodexSDKClient, query
+from codex_agent_sdk import CodexOptions, AppServerClient, query
 ```
 
 If a name is re-exported from `codex_agent_sdk`, that root import path is part
-of the intended public API contract.
+of the intended public API.
 
-## Stable support modules
+## Stable Support Modules
 
 Three focused modules are also treated as stable support surfaces:
 
 - `codex_agent_sdk.options`
-  - configuration dataclasses and timeout policy helpers
+  for configuration dataclasses and timeout helpers
 - `codex_agent_sdk.errors`
-  - public exception types and JSON-RPC error classification helpers
+  for the public exception hierarchy and JSON-RPC error classification helpers
 - `codex_agent_sdk.retry`
-  - opt-in overload retry helpers and retry policy dataclasses
+  for opt-in overload retry helpers and policy dataclasses
 
-These modules may be imported directly when a caller wants a narrower import or
-needs type names without importing the full barrel.
+Use these modules when you want narrower imports without pulling in the full
+root barrel.
 
-## Public layer implementation homes
+## Public Module Homes
 
-The modules below are where the public abstractions live, but docs and examples
-should still prefer root imports:
+The public abstractions live in these modules, even though most docs and
+examples should still prefer root imports:
 
 - `codex_agent_sdk.client`
 - `codex_agent_sdk.query`
@@ -39,14 +39,13 @@ should still prefer root imports:
 - `codex_agent_sdk.approvals`
 - `codex_agent_sdk.results`
 
-These modules exist to keep the public SDK organized. They should not become the
-primary import story for users.
+These modules organize the public SDK surface. They are not meant to replace
+the root import story for the common path.
 
-## Non-promoted lower layers
+## Non-Promoted Lower Layers
 
 The modules below are intentionally importable for advanced or internal work,
-but they are not part of the curated root surface and should not be treated as
-stable user API unless a later task explicitly promotes them:
+but they are not part of the curated user-facing surface:
 
 - `codex_agent_sdk.transport`
 - `codex_agent_sdk.rpc`
@@ -54,14 +53,16 @@ stable user API unless a later task explicitly promotes them:
 - `codex_agent_sdk.generated`
 - `codex_agent_sdk.testing`
 
-## Rule for future additions
+Rely on them only when you are deliberately working below the public API layer.
+
+## Rule For Future Additions
 
 When a new abstraction becomes public:
 
 1. define it in the appropriate public-layer module
-2. document it in the public API contract if the contract changes
-3. re-export it from `codex_agent_sdk`
+2. re-export it from `codex_agent_sdk`
+3. document it in the relevant user-facing docs
 4. add or update tests that lock down the root import surface
 
-That keeps the happy path visible from the top level without collapsing the
-layered architecture underneath it.
+That keeps the supported entry points obvious without collapsing the internal
+layer boundaries.

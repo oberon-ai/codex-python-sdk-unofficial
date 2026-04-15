@@ -7,7 +7,7 @@ uses `uv` as the only supported dependency manager.
 - Transport, subprocess management, queues, cancellation, and streaming stay on
   the Python standard library.
 - The repo does not introduce `anyio`, Trio, HTTP client wrappers, or generic
-  async abstraction layers in v1.
+  async abstraction layers.
 - Code generation tooling is isolated from day-to-day development so end users
   do not pay for maintainer-only tools.
 
@@ -17,7 +17,8 @@ uses `uv` as the only supported dependency manager.
 metadata and local dependency groups.
 
 `uv.lock` records the exact resolved package set for reproducible local work,
-CI, builds, and code generation. When you need the locked toolchain, prefer:
+verification, builds, and code generation. When you need the locked toolchain,
+prefer:
 
 ```bash
 uv sync
@@ -35,9 +36,9 @@ The runtime dependency set is one package:
 
 | Package | Locked version | Metadata range | Why it exists |
 | --- | --- | --- | --- |
-| `pydantic` | `2.13.0` | `>=2.13,<3` | Generated protocol models need a typed validation and serialization layer, and the upstream Codex Python SDK already uses Pydantic v2 for this job. |
+| `pydantic` | `2.13.0` | `>=2.13,<3` | Generated protocol models need a typed validation and serialization layer. |
 
-Why nothing else is runtime-critical yet:
+Why nothing else is runtime-critical:
 
 - `typing_extensions` is not a direct dependency because the project baseline
   is Python 3.11.
@@ -54,18 +55,17 @@ These tools live in the default `dev` dependency group:
 | --- | --- | --- | --- |
 | `mypy` | `1.20.1` | `>=1.20,<2` | Enforces strict typing across handwritten code. |
 | `pytest` | `9.0.3` | `>=9,<10` | Runs the repository test suite. |
-| `pytest-asyncio` | `1.3.0` | `>=1.3,<2` | Supports native async transport and client tests without adding a non-stdlib runtime abstraction. |
-| `ruff` | `0.15.10` | `>=0.15,<0.16` | Provides formatting and linting. |
+| `pytest-asyncio` | `1.3.0` | `>=1.3,<2` | Supports native async transport and client tests. |
+| `ruff` | `0.15.10` | `>=0.15,<0.16` | Provides linting and formatting. |
 
-`uv` installs the `dev` group by default for this repo, so normal contributor
-setup is just:
+Because `uv` installs the `dev` group by default, the normal contributor setup
+is simply:
 
 ```bash
 uv sync
 ```
 
-Runtime-only local setup is still available when you do not want contributor
-tooling:
+Runtime-only setup is still available:
 
 ```bash
 uv sync --no-dev
@@ -73,12 +73,12 @@ uv sync --no-dev
 
 ## Codegen-Only Tooling
 
-The repo keeps schema-to-model generation tooling out of the default sync. Use
-it only when regenerating protocol artifacts.
+The repository keeps schema-to-model generation tooling out of the default
+sync.
 
 | Package | Locked version | Group specifier | Why it exists |
 | --- | --- | --- | --- |
-| `datamodel-code-generator` | `0.56.0` | `>=0.56,<0.57` | Generates Pydantic model scaffolding from the Codex JSON Schema bundle. |
+| `datamodel-code-generator` | `0.56.0` | `>=0.56,<0.57` | Generates Pydantic model scaffolding from the vendored Codex JSON Schema bundle. |
 
 Sync it explicitly with:
 
@@ -100,8 +100,8 @@ There is no separate `build` package in the contributor dependency group.
 ## Docs Tooling
 
 There is no docs-specific dependency group yet. The current docs are
-handwritten Markdown, so adding MkDocs or Sphinx now would broaden the
-dependency surface without supporting an active workflow.
+handwritten Markdown, so adding MkDocs or Sphinx would broaden the dependency
+surface without supporting an existing workflow.
 
 ## Command Summary
 

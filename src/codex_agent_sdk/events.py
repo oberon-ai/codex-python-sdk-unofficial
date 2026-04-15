@@ -1,8 +1,4 @@
-"""Typed public event surfaces for streamed Codex turns.
-
-These dataclasses reserve the top-level event contract while the lower-level
-protocol adapters are still under construction.
-"""
+"""Typed public event surfaces for streamed Codex turns."""
 
 from __future__ import annotations
 

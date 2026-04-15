@@ -236,13 +236,14 @@ class TimeoutPolicyTests(unittest.TestCase):
     def test_codex_options_doc_explains_layering_and_precedence(self) -> None:
         options_doc = REPO_ROOT / "docs" / "codex-options.md"
         content = options_doc.read_text(encoding="utf-8")
+        lowered = content.lower()
 
         self.assertTrue(options_doc.exists())
         self.assertIn("CodexOptions", content)
         self.assertIn("AppServerConfig", content)
-        self.assertIn("client defaults", content)
-        self.assertIn("thread defaults", content)
-        self.assertIn("per-turn overrides", content)
+        self.assertIn("client defaults", lowered)
+        self.assertIn("thread defaults", lowered)
+        self.assertIn("per-turn overrides", lowered)
         self.assertIn("output_schema", content)
         self.assertIn("experimental_api", content)
         self.assertIn("opt_out_notification_methods", content)

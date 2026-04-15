@@ -1,50 +1,78 @@
 # Package Layout
 
-This repository uses a layered package layout so the native-async transport,
-JSON-RPC protocol handling, generated schema models, and public API stay
-separate as the SDK grows.
+The repository uses a layered layout so the transport, JSON-RPC machinery,
+generated wire models, handwritten protocol adapters, and public SDK surface
+can evolve independently.
 
-## Layer map
+## Source Tree
 
 - `src/codex_agent_sdk/transport/`
-  - Owns subprocess lifecycle, stdio wiring, stderr capture, and JSONL IO.
+  owns subprocess lifecycle, stdio wiring, stderr capture, and newline-delimited
+  JSON framing.
 - `src/codex_agent_sdk/rpc/`
-  - Owns JSON-RPC envelopes, request correlation, connection state, and
-    notification or server-request routing.
+  owns JSON-RPC envelopes, request correlation, subscriptions, and server-request
+  routing.
 - `src/codex_agent_sdk/generated/`
-  - Reserved for machine-generated protocol artifacts only. Handwritten edits
-    do not belong here.
+  contains generated protocol artifacts only.
 - `src/codex_agent_sdk/protocol/`
-  - Owns handwritten registries and adapters that sit on top of generated wire
-    models.
+  contains handwritten adapters, registries, and helpers layered on top of the
+  generated models.
 - `src/codex_agent_sdk/client.py`, `query.py`, `events.py`, `approvals.py`,
-  and `results.py`
-  - Reserved for the public SDK surface and other ergonomic helpers.
+  `results.py`, `options.py`, `errors.py`, and `retry.py`
+  make up the public SDK surface and stable support modules.
 - `src/codex_agent_sdk/testing/`
-  - Reserved for fake app-server harnesses and other SDK-specific test helpers.
+  contains fake app-server helpers and other SDK-specific test support code.
 
-## Repository support directories
+## Repository Support Directories
 
 - `tests/`
-  - Unit and integration tests for handwritten and generated layers.
+  contains unit and integration coverage for the handwritten and generated
+  layers.
 - `tests/fixtures/`
-  - Curated JSON-RPC envelopes, schema snapshots, fake-server scripts, and
-    golden transcripts used by deterministic protocol and client tests.
-  - The vendored schema source of truth lives under
-    `tests/fixtures/schema_snapshots/`, with hashes and version pin metadata in
-    `tests/fixtures/schema_snapshots/vendor_manifest.json`.
+  contains reusable protocol fixtures, schema snapshots, fake server scripts,
+  and golden transcripts.
 - `examples/`
-  - User-facing example programs and sample workflows.
+  contains runnable example programs for the public API.
 - `scripts/`
-  - Code generation, release, or maintenance scripts.
+  contains repository maintenance entry points.
+- `docs/`
+  contains user-facing and maintainer-facing Markdown documentation.
 
-## Contributor rules
+## Fixture Tree
 
-- Re-export public SDK names from `codex_agent_sdk/__init__.py` so users do not
-  have to learn internal module paths for the happy path.
-- Keep generated protocol code isolated under `src/codex_agent_sdk/generated/`.
-- Put transport concerns in `transport/`, not in public API helpers.
-- Put JSON-RPC request and routing concerns in `rpc/`, not in `client.py`.
-- Keep the top-level public API thin and Codex-native.
-- When in doubt, add a small handwritten adapter on top of generated models
-  rather than copying the wire format into multiple modules.
+The repository relies on a deliberately structured `tests/fixtures/` tree:
+
+- JSON-RPC requests, responses, notifications, and server requests live under
+  `tests/fixtures/jsonrpc/`
+- schema snapshots live under `tests/fixtures/schema_snapshots/`
+- fake app-server recordings live under `tests/fixtures/fake_server_scripts/`
+- golden transcripts for turn and approval flows live under
+  `tests/fixtures/golden_transcripts/`
+
+The schema snapshots are the canonical input to generated Python artifacts.
+`tests/fixtures/schema_snapshots/vendor_manifest.json` records the current
+stable and experimental schema snapshots, their hashes, and the pinned Codex
+CLI version used to refresh them.
+
+## Public Surface Versus Lower Layers
+
+The public SDK surface is intentionally smaller than the full package tree.
+
+- End-user code should usually import from `codex_agent_sdk`.
+- `codex_agent_sdk.options`, `codex_agent_sdk.errors`, and
+  `codex_agent_sdk.retry` are stable support modules.
+- `transport`, `rpc`, `protocol`, `generated`, and `testing` stay importable
+  for advanced work, but they are not the main user path.
+
+See [public-import-policy.md](public-import-policy.md) for the detailed import
+rules.
+
+## Contributor Rules
+
+- Keep generated code isolated under `src/codex_agent_sdk/generated/`.
+- Keep transport concerns in `transport/`, not in public convenience helpers.
+- Keep JSON-RPC request and routing concerns in `rpc/`, not in `client.py`.
+- Prefer thin handwritten adapters on top of generated models instead of
+  copying wire shapes across multiple modules.
+- Preserve the layered boundary between public SDK surface, protocol adapters,
+  generated code, and testing helpers.

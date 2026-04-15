@@ -51,6 +51,8 @@ class PackageLayoutTests(unittest.TestCase):
 
     def test_repository_support_directories_have_placeholders(self) -> None:
         expected_files = [
+            REPO_ROOT / "docs" / "README.md",
+            REPO_ROOT / "docs" / "api.md",
             REPO_ROOT / "docs" / "package-layout.md",
             REPO_ROOT / "docs" / "codex-options.md",
             REPO_ROOT / "examples" / "README.md",
@@ -69,6 +71,15 @@ class PackageLayoutTests(unittest.TestCase):
         self.assertIn("generated", content)
         self.assertIn("public SDK surface", content)
         self.assertIn("testing", content)
+
+    def test_docs_index_lists_core_guides(self) -> None:
+        content = (REPO_ROOT / "docs" / "README.md").read_text()
+
+        self.assertIn("api.md", content)
+        self.assertIn("codex-options.md", content)
+        self.assertIn("package-layout.md", content)
+        self.assertIn("schema-vendoring.md", content)
+        self.assertIn("protocol-model-codegen.md", content)
 
 
 if __name__ == "__main__":

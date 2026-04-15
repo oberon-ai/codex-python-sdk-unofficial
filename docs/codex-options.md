@@ -1,4 +1,4 @@
-# CodexOptions
+# Codex Options
 
 `CodexOptions` is the high-level defaults object for the public SDK entry
 points:
@@ -12,12 +12,12 @@ points:
 
 It is deliberately separate from `AppServerConfig`.
 
-## What belongs where
+## What Belongs Where
 
 Use `CodexOptions` for sticky Codex behavior defaults:
 
 - model selection
-- working directory inside the thread/turn
+- workspace `cwd` inside the thread or turn
 - approval policy and reviewer
 - reasoning effort and summary
 - personality
@@ -39,27 +39,27 @@ Use `AppServerConfig` for app-server process and connection bootstrap:
 Keep `output_schema` off `CodexOptions`.
 
 - `output_schema` applies only to the current `turn/start`
-- it should stay a direct argument to `query()` / `CodexSDKClient.query()`
+- it stays a direct argument to `query()` and `CodexSDKClient.query()`
 - it is not part of sticky default merging
 
-## Field shape
+## Supported Fields
 
-`CodexOptions` intentionally stays smaller than the raw wire schema.
+`CodexOptions` stays smaller than the raw wire schema on purpose.
 
 Promoted high-level fields:
 
-- shared sticky defaults:
+- shared defaults:
   - `model`
   - `cwd`
   - `approval_policy`
   - `approvals_reviewer`
   - `personality`
   - `service_tier`
-- thread-focused defaults:
+- thread defaults:
   - `base_instructions`
   - `developer_instructions`
   - `sandbox_mode`
-- turn-focused defaults:
+- per-turn defaults:
   - `effort`
   - `summary`
   - `sandbox_policy`
@@ -71,12 +71,12 @@ Deliberately excluded from `CodexOptions`:
 - `experimental_api`
 - `opt_out_notification_methods`
 - low-level transport knobs
-- every raw `thread/start` and `turn/start` protocol field
+- every raw `thread/start` and `turn/start` field exposed by the protocol
 
 ## Normalization
 
-The constructor accepts Python-friendly strings and mappings where that improves
-ergonomics, but it stores normalized generated stable types internally.
+The constructor accepts Python-friendly strings and mappings where that keeps
+call sites small, but it stores normalized generated types internally.
 
 Examples:
 
@@ -86,8 +86,8 @@ Examples:
 - `sandbox_policy={"type": "workspaceWrite", ...}` becomes generated
   `SandboxPolicy`
 
-That keeps later client code typed without forcing callers to build generated
-models by hand.
+That lets the rest of the SDK work with typed values without forcing callers to
+instantiate generated models by hand.
 
 ## Precedence
 
@@ -97,13 +97,13 @@ The intended merge order is:
 2. thread defaults
 3. per-turn overrides
 
-The rule is simple:
+Rules:
 
 - later non-`None` values win
-- `None` means "do not override"
+- `None` means "leave the earlier value alone"
 - `output_schema` is not merged because it is current-turn-only
 
-The implementation exposes that rule directly as:
+The implementation exposes that rule directly:
 
 ```python
 effective = CodexOptions.merge(client_defaults, thread_defaults, turn_overrides)
@@ -115,11 +115,11 @@ There is also a convenience instance method:
 effective = client_defaults.merged_with(thread_defaults)
 ```
 
-## Mapping onto protocol calls
+## Mapping Onto Protocol Calls
 
-The protocol does not use exactly the same field set on every method, so
-`CodexOptions` exposes small projection helpers instead of encouraging callers
-to manually assemble dicts.
+The app-server protocol does not use the exact same field set on every method,
+so `CodexOptions` exposes projection helpers instead of encouraging ad hoc
+dictionary assembly.
 
 Available helpers:
 
@@ -133,13 +133,13 @@ These helpers intentionally preserve protocol differences.
 Examples:
 
 - `thread/fork` currently does not accept `personality`, so
-  `to_thread_fork_kwargs(...)` omits it
+  `to_thread_fork_kwargs(...)` omits it.
 - `turn/start` accepts `sandbox_policy`, while thread lifecycle calls use the
-  coarser `sandbox` enum
+  coarser `sandbox` enum.
 
-## Sandbox layering
+## Sandbox Layering
 
-The upstream stable protocol splits sandbox defaults across two shapes:
+The stable protocol splits sandbox defaults across two shapes:
 
 - thread lifecycle calls use coarse `sandbox`
 - `turn/start` uses richer `sandboxPolicy`
@@ -149,19 +149,19 @@ The upstream stable protocol splits sandbox defaults across two shapes:
 - `sandbox_mode`
 - `sandbox_policy`
 
-The projection helpers bridge the gap where possible:
+The projection helpers bridge that split conservatively:
 
-- if only `sandbox_policy` is set and it has a coarse built-in mode such as
+- if only `sandbox_policy` is set and it maps to a coarse built-in mode such as
   `readOnly` or `workspaceWrite`, thread helpers derive `sandbox`
 - if only `sandbox_mode` is set, turn helpers derive a simple matching
   `sandbox_policy`
 
-This bridge is intentionally conservative. It avoids inventing richer thread
-semantics that the protocol does not support.
+That keeps the API practical without inventing semantics the protocol does not
+support.
 
 ## Examples
 
-High-level defaults for a stateful client:
+Client defaults:
 
 ```python
 from codex_agent_sdk import CodexOptions, CodexSDKClient
@@ -179,12 +179,12 @@ defaults = CodexOptions(
 client = CodexSDKClient(options=defaults)
 ```
 
-Thread-specific overlay:
+Thread defaults layered over client defaults:
 
 ```python
 thread_defaults = CodexOptions(
     cwd="/repo/subdir",
-    base_instructions="Stay focused on test failures.",
+    base_instructions="Stay focused on the failing tests.",
 )
 
 effective = CodexOptions.merge(defaults, thread_defaults)
@@ -222,11 +222,10 @@ app_server = AppServerConfig(
 )
 ```
 
-## Notes for later tasks
+## Guidance For Contributors
 
-- High-level `CodexSDKClient` code should use `CodexOptions.merge(...)` instead
-  of re-implementing precedence rules ad hoc.
-- High-level turn start code should keep `output_schema` separate from
-  `CodexOptions`.
-- New protocol fields should only be promoted into `CodexOptions` when they are
-  stable, user-meaningful defaults rather than low-level wire details.
+- Use `CodexOptions.merge(...)` instead of re-implementing precedence rules in
+  new client helpers.
+- Keep `output_schema` separate from `CodexOptions`.
+- Only promote new protocol fields into `CodexOptions` when they are stable,
+  user-meaningful defaults rather than low-level transport details.

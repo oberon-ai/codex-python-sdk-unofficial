@@ -1,8 +1,9 @@
 """Public client entry points for the Codex SDK.
 
-``AppServerClient`` is the low-level JSON-RPC escape hatch. ``CodexSDKClient``
-is the stateful high-level thread client. Their concrete behavior lands in
-later tasks, but the public names live here from the start.
+``AppServerClient`` is the low-level native-async JSON-RPC client.
+``CodexSDKClient`` is the intended high-level stateful thread client surface.
+The low-level client is the fully usable path today; the higher-level client
+remains preview API until its workflow helpers are implemented.
 """
 
 from __future__ import annotations
