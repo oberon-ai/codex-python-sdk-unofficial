@@ -199,7 +199,9 @@ workflow contract, local dry-run command, and required GitHub Actions secrets.
 
 ## Project Notes
 
-- This project is unofficial and is not affiliated with OpenAI.
+- This project is unofficial and is not affiliated with OpenAI
+- This was implemented and released by Oberon AI
+- All PRs merged to main must be approved by Oberon AI's engineering team
 - Stable protocol artifacts are generated from vendored schema snapshots checked
   into this repository.
 - A standalone license file has not been added yet.
