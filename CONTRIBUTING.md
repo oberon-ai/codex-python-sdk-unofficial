@@ -33,6 +33,33 @@ The authoritative project metadata lives in `pyproject.toml`. `uv.lock`
 records the exact dependency set used for local verification, builds, and
 code-generation work.
 
+## Publishing
+
+Package releases are versioned from `pyproject.toml` and published to PyPI.
+
+Before the first release, configure PyPI Trusted Publishing for this GitHub
+repository and the `.github/workflows/publish-pypi.yml` workflow.
+
+Recommended release flow:
+
+1. Set the next package version in `pyproject.toml`.
+2. Build and validate the distributions locally:
+
+   ```bash
+   uv build
+   uvx twine check dist/*
+   ```
+
+3. Push a tag such as `v0.1.0`.
+4. Let the GitHub Actions publish workflow build and upload the package to
+   PyPI.
+
+For a manual fallback, you can publish the already-built artifacts yourself:
+
+```bash
+uv publish
+```
+
 ## Local Setup
 
 Install the default contributor environment from the repository root:

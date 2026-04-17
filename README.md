@@ -32,13 +32,24 @@ directly.
 ## Requirements
 
 - Python 3.11+
-- [`uv`](https://docs.astral.sh/uv/) for local environment management
 - A working `codex` CLI on `PATH`
 - Whatever authentication your local Codex CLI already requires
 
-## Install From Source
+## Install
 
-The project is currently meant to be used from a checkout:
+Install from PyPI:
+
+```bash
+pip install codex-agent-sdk-unofficial
+```
+
+Or with `uv`:
+
+```bash
+uv add codex-agent-sdk-unofficial
+```
+
+Install from a checkout for local development:
 
 ```bash
 uv sync
@@ -146,21 +157,21 @@ The repository ships a few runnable examples under [examples](examples):
   runs a small interactive loop on top of `AppServerClient`, including manual
   approval handling.
 
-See [examples/README.md](examples/README.md) for details and command-line
-options.
+See [examples/README.md](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/examples/README.md)
+for details and command-line options.
 
 ## Documentation
 
-- [Documentation index](docs/README.md)
-- [API overview](docs/api.md)
-- [Configuration and option layering](docs/codex-options.md)
-- [Package layout](docs/package-layout.md)
-- [Public import policy](docs/public-import-policy.md)
-- [Schema vendoring](docs/schema-vendoring.md)
-- [Protocol model code generation](docs/protocol-model-codegen.md)
-- [Upstream tracking automation](docs/upstream-tracking.md)
-- [Dependency policy](docs/dependency-policy.md)
-- [Contributing](CONTRIBUTING.md)
+- [Documentation index](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/docs/README.md)
+- [API overview](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/docs/api.md)
+- [Configuration and option layering](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/docs/codex-options.md)
+- [Package layout](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/docs/package-layout.md)
+- [Public import policy](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/docs/public-import-policy.md)
+- [Schema vendoring](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/docs/schema-vendoring.md)
+- [Protocol model code generation](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/docs/protocol-model-codegen.md)
+- [Upstream tracking automation](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/docs/upstream-tracking.md)
+- [Dependency policy](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/docs/dependency-policy.md)
+- [Contributing](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/CONTRIBUTING.md)
 
 ## Development
 
@@ -175,7 +186,7 @@ uv build
 ```
 
 Contributor setup, code generation, and schema refresh workflows are documented
-in [CONTRIBUTING.md](CONTRIBUTING.md).
+in [CONTRIBUTING.md](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/CONTRIBUTING.md).
 
 ## Automated Upstream Tracking
 
@@ -194,8 +205,14 @@ The workflow:
 - publishes a GitHub release tagged as `upstream-<upstream-tag>` when the
   latest upstream stable release changes
 
-See [docs/upstream-tracking.md](docs/upstream-tracking.md) for the detailed
-workflow contract, local dry-run command, and required GitHub Actions secrets.
+See [docs/upstream-tracking.md](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/docs/upstream-tracking.md)
+for the detailed workflow contract, local dry-run command, and required GitHub
+Actions secrets.
+
+## License
+
+This project is licensed under the Apache License 2.0. See
+[LICENSE](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/LICENSE).
 
 ## Project Notes
 
@@ -204,4 +221,3 @@ workflow contract, local dry-run command, and required GitHub Actions secrets.
 - All PRs merged to main must be approved by Oberon AI's engineering team
 - Stable protocol artifacts are generated from vendored schema snapshots checked
   into this repository.
-- A standalone license file has not been added yet.
