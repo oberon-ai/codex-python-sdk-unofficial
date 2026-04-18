@@ -39,6 +39,7 @@ jobs:
     env:
       CONTROLLER_PATH: controller
       TARGET_PATH: target
+      CODEX_HOME: ${{ runner.temp }}/.codex
 
     steps:
       - name: Check out workflow controller
@@ -92,6 +93,13 @@ jobs:
 
       - name: Show Codex version
         run: codex --version
+
+      - name: Bootstrap Codex API-key auth
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          mkdir -p "$CODEX_HOME"
+          printenv OPENAI_API_KEY | codex login --with-api-key
 
       - name: Sync project environment
         working-directory: ${{ env.CONTROLLER_PATH }}

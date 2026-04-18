@@ -417,11 +417,13 @@ def test_version_tracker_workflow_declares_daily_schedule_and_tracking_branch_pu
     assert "pull-requests: write" in workflow
     assert "path: controller" in workflow
     assert "path: target" in workflow
+    assert "CODEX_HOME: ${{ runner.temp }}/.codex" in workflow
     assert "ref: main" in workflow
     assert 'base_ref="${BASE_REF:-main}"' in workflow
     assert 'git checkout --detach "origin/$base_ref"' in workflow
     assert 'git checkout --detach FETCH_HEAD' in workflow
     assert "npm install --global @openai/codex" in workflow
+    assert "codex login --with-api-key" in workflow
     assert "working-directory: ${{ env.CONTROLLER_PATH }}" in workflow
     assert "working-directory: ${{ env.TARGET_PATH }}" in workflow
     assert "uv run python -m codex_meta_agent" in workflow
@@ -448,8 +450,10 @@ def test_legacy_release_workflow_dispatches_targeted_backfill() -> None:
     assert "skip_verification:" in workflow
     assert "path: controller" in workflow
     assert "path: target" in workflow
+    assert "CODEX_HOME: ${{ runner.temp }}/.codex" in workflow
     assert 'base_ref="${BASE_REF:-main}"' in workflow
     assert 'git checkout --detach FETCH_HEAD' in workflow
+    assert "codex login --with-api-key" in workflow
     assert "working-directory: ${{ env.CONTROLLER_PATH }}" in workflow
     assert "working-directory: ${{ env.TARGET_PATH }}" in workflow
     assert '--repo-root "$TARGET_REPO"' in workflow

@@ -64,19 +64,21 @@ The tracker workflow does the following:
 
 1. checks out the automation controller and a separate clean target checkout,
    then installs Python, `uv`, Node.js, and the Codex CLI
-2. reads the committed `.github/codex-upstream-state.json`
-3. fetches `openai/codex` `releases/latest` metadata from GitHub
-4. compares the latest upstream release tag against the previously tracked
+2. bootstraps a clean headless Codex auth home by piping the
+   `OPENAI_API_KEY` secret through `codex login --with-api-key`
+3. reads the committed `.github/codex-upstream-state.json`
+4. fetches `openai/codex` `releases/latest` metadata from GitHub
+5. compares the latest upstream release tag against the previously tracked
    release tag
-5. downloads relevant upstream files from the new release tag under tracked
+6. downloads relevant upstream files from the new release tag under tracked
    prefixes such as `sdk/python/` and `codex-rs/app-server-protocol/` into
    `.codex-meta-agent/`
-6. runs `uv run python -m codex_meta_agent --repo-root <target checkout>`, which uses
+7. runs `uv run python -m codex_meta_agent --repo-root <target checkout>`, which uses
    `SyncCodexSDKClient` plus an enforced JSON output schema to let Codex update
    the target checkout without depending on the repository it is rewriting
-7. runs the repository verification commands
-8. commits the resulting changes on `puck/frontier-realese--v<version>`
-9. creates or reuses a pull request back to `main`
+8. runs the repository verification commands
+9. commits the resulting changes on `puck/frontier-realese--v<version>`
+10. creates or reuses a pull request back to `main`
 
 The manual legacy-release workflow does the same preparation flow, but requires
 an explicit target version and uses `puck/flegacy-release--v<version>` for the
@@ -167,7 +169,8 @@ and updates `.github/codex-upstream-state.json`.
 The workflows expect:
 
 - `OPENAI_API_KEY`
-  so the Codex CLI can authenticate in GitHub Actions
+  so the workflow can bootstrap headless Codex auth with
+  `codex login --with-api-key`
 - `GITHUB_TOKEN`
   so the tracker can read GitHub metadata, push tracking branches, create pull
   requests, and create repository releases
