@@ -433,6 +433,7 @@ def test_version_tracker_workflow_declares_daily_schedule_and_tracking_branch_pu
     assert 'cmd+=(--skip-verification)' in workflow
     assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
     assert 'gh pr create \\' in workflow
+    assert "TRACKER_GH_TOKEN" in workflow
     assert "Frontier release v${{ steps.tracker.outputs.release_version }}" in workflow
     assert "Legacy release v${{ steps.tracker.outputs.release_version }}" in workflow
     assert 'git config user.name "$author_name"' in workflow
@@ -461,6 +462,7 @@ def test_legacy_release_workflow_dispatches_targeted_backfill() -> None:
     assert '--tracking-branch-prefix "puck/flegacy-release--"' in workflow
     assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
     assert 'gh pr create \\' in workflow
+    assert "TRACKER_GH_TOKEN" in workflow
     assert "Legacy release v${{ steps.tracker.outputs.release_version }}" in workflow
 
 

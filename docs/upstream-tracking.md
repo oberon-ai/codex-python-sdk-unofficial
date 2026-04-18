@@ -177,6 +177,9 @@ The workflows expect:
 - optionally `TRACKER_GIT_AUTHOR_NAME` and `TRACKER_GIT_AUTHOR_EMAIL`
   as repository or environment secrets when you want automated commits to use a
   specific identity instead of the triggering actor
+- optionally `TRACKER_GH_TOKEN`
+  when repository policy blocks the default `GITHUB_TOKEN` from opening pull
+  requests; the workflow will prefer this token for PR lookup and creation
 - a configured PyPI trusted publishing environment named `pypi`
 
 If branch protections or action restrictions block branch pushes or release

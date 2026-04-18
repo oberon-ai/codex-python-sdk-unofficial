@@ -170,7 +170,7 @@ jobs:
         if: steps.tracker.outputs.changed == 'true'
         id: existing_pr
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TRACKER_GH_TOKEN || secrets.GITHUB_TOKEN }}
         working-directory: ${{ env.TARGET_PATH }}
         run: |
           pr_url="$(gh pr list \
@@ -184,7 +184,7 @@ jobs:
       - name: Create release PR
         if: steps.tracker.outputs.changed == 'true' && steps.existing_pr.outputs.url == ''
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TRACKER_GH_TOKEN || secrets.GITHUB_TOKEN }}
         working-directory: ${{ env.TARGET_PATH }}
         run: |
           if [[ "${{ steps.tracker.outputs.release_branch }}" == puck/flegacy-release--* ]]; then
@@ -198,9 +198,9 @@ jobs:
           cat > "$body_file" <<EOF
           $intro
 
-          - upstream release: `${{ steps.tracker.outputs.upstream_release_tag }}`
-          - local release version: `v${{ steps.tracker.outputs.release_version }}`
-          - release branch: `${{ steps.tracker.outputs.release_branch }}`
+          - upstream release: ${{ steps.tracker.outputs.upstream_release_tag }}
+          - local release version: v${{ steps.tracker.outputs.release_version }}
+          - release branch: ${{ steps.tracker.outputs.release_branch }}
           EOF
           gh pr create \
             --base main \
