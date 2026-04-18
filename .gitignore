@@ -13,3 +13,6 @@ build/
 dist/
 *.egg-info/
 .codex-meta-agent/
+.secrets
+secrets.yaml
+secrest.yaml
