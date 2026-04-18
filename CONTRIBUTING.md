@@ -203,10 +203,13 @@ The automation is split across:
 - `src/codex_meta_agent/`
   the Python orchestration package
 - `.github/codex-upstream-state.json`
-  the committed record of the last upstream main commit and stable release tag
+  the committed record of the last upstream release tag
 - `.github/workflows/version-tracker.yml`
-  the daily and manual trigger that runs the tracker, commits changes to
-  `main`, and publishes releases
+  the daily and manual frontier-release trigger that starts from a clean
+  `main` checkout, prepares `puck/frontier-realese--v<version>`, and opens a PR
+- `.github/workflows/legacy-release.yml`
+  the manual legacy-release trigger that starts from a clean `main` checkout,
+  prepares `puck/flegacy-release--v<version>`, and opens a PR
 
 The tracker uses `SyncCodexSDKClient` so the maintenance job exercises the SDK
 itself rather than bypassing it with a separate automation stack.
@@ -216,15 +219,15 @@ Useful local commands:
 ```bash
 uv run python -m codex_meta_agent --dry-run
 uv run python -m codex_meta_agent --skip-verification
+uv run python -m codex_meta_agent --target-version 0.119.0 --tracking-branch-prefix puck/flegacy-release-- --skip-verification
 ```
 
 The workflow assumes:
 
-- GitHub Actions is allowed to push back to `main`
+- GitHub Actions is allowed to push release-prep branches and open pull
+  requests against `main`
 - `OPENAI_API_KEY` is available to the runner
-- the tracked release tags in this repository are prefixed as
-  `upstream-<upstream-tag>` so they do not collide with any future project
-  versioning scheme
+- the release tags in this repository use the normalized `v<version>` format
 
 ## Dependency Changes
 

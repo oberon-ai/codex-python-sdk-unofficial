@@ -2,21 +2,20 @@
 
 This package is intentionally separate from ``codex_agent_sdk`` itself. It
 uses the SDK as an orchestration tool for repository maintenance workflows such
-as upstream drift detection, branch-sync updates, and stable-release planning.
+as upstream drift detection, release-tracking updates, and stable-release planning.
 """
 
 from .version_tracker import (
     DEFAULT_CONTEXT_DIR,
     DEFAULT_RELEASE_TAG_PREFIX,
     DEFAULT_STATE_PATH,
-    DEFAULT_UPSTREAM_BRANCH,
+    DEFAULT_TRACKING_BRANCH_PREFIX,
     DEFAULT_UPSTREAM_REPOSITORY,
     DEFAULT_VERIFICATION_COMMANDS,
     GitHubCompareCommit,
     GitHubCompareFile,
     GitHubCompareResult,
     GitHubRelease,
-    GitHubRepositoryHead,
     TrackerResponse,
     TrackingState,
     UpstreamSnapshot,
@@ -25,7 +24,9 @@ from .version_tracker import (
     VersionTrackerConfig,
     VersionTrackerResult,
     build_release_tag,
+    build_tracking_branch,
     main,
+    normalize_release_version,
     parse_tracker_response,
     render_tracker_prompt,
 )
@@ -34,14 +35,13 @@ __all__ = [
     "DEFAULT_CONTEXT_DIR",
     "DEFAULT_RELEASE_TAG_PREFIX",
     "DEFAULT_STATE_PATH",
-    "DEFAULT_UPSTREAM_BRANCH",
     "DEFAULT_UPSTREAM_REPOSITORY",
     "DEFAULT_VERIFICATION_COMMANDS",
+    "DEFAULT_TRACKING_BRANCH_PREFIX",
     "GitHubCompareCommit",
     "GitHubCompareFile",
     "GitHubCompareResult",
     "GitHubRelease",
-    "GitHubRepositoryHead",
     "TrackingState",
     "TrackerResponse",
     "UpstreamSnapshot",
@@ -50,7 +50,9 @@ __all__ = [
     "VersionTrackerConfig",
     "VersionTrackerResult",
     "build_release_tag",
+    "build_tracking_branch",
     "main",
+    "normalize_release_version",
     "parse_tracker_response",
     "render_tracker_prompt",
 ]

@@ -1,30 +1,33 @@
-name: Track Codex Upstream Release
+name: Prepare Legacy Codex Release
 
 on:
-  schedule:
-    - cron: "17 6 * * *"
   workflow_dispatch:
     inputs:
       base_ref:
-        description: "Git ref to prepare from for manual testing; defaults to main"
+        description: "Git ref to prepare from; defaults to main but can point at a test branch"
         required: false
         default: "main"
         type: string
       target_version:
-        description: "Optional Codex release version or tag to prepare instead of the latest release"
-        required: false
+        description: "Codex release version or tag to prepare from a fresh main checkout"
+        required: true
         type: string
+      skip_verification:
+        description: "Skip repository verification after Codex updates the checkout"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
   pull-requests: write
 
 concurrency:
-  group: codex-version-tracker
+  group: legacy-release-${{ inputs.target_version }}
   cancel-in-progress: false
 
 jobs:
-  track-upstream-release:
+  prepare-legacy-release:
     runs-on: ubuntu-latest
 
     steps:
@@ -43,7 +46,7 @@ jobs:
           git fetch origin "$base_ref"
           git checkout --detach "origin/$base_ref"
           if [ -n "$(git status --porcelain)" ]; then
-            echo "Expected a clean checkout before running the tracker." >&2
+            echo "Expected a clean checkout before preparing a legacy release." >&2
             git status --short >&2
             exit 1
           fi
@@ -70,20 +73,26 @@ jobs:
       - name: Sync project environment
         run: uv sync --group codegen
 
-      - name: Run upstream version tracker
+      - name: Run legacy release tracker
         id: tracker
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TARGET_VERSION: ${{ inputs.target_version }}
+          SKIP_VERIFICATION: ${{ inputs.skip_verification }}
         run: |
-          cmd=(uv run python -m codex_meta_agent --github-output "$GITHUB_OUTPUT")
-          if [ -n "$TARGET_VERSION" ]; then
-            cmd+=(--target-version "$TARGET_VERSION")
+          cmd=(
+            uv run python -m codex_meta_agent
+            --github-output "$GITHUB_OUTPUT"
+            --target-version "$TARGET_VERSION"
+            --tracking-branch-prefix "puck/flegacy-release--"
+          )
+          if [ "$SKIP_VERIFICATION" = "true" ]; then
+            cmd+=(--skip-verification)
           fi
           "${cmd[@]}"
 
-      - name: Check whether tracking branch already exists
+      - name: Check whether legacy branch already exists
         if: steps.tracker.outputs.changed == 'true'
         id: existing_branch
         run: |
@@ -93,7 +102,7 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Commit release-tracking changes
+      - name: Commit legacy release changes
         if: steps.tracker.outputs.changed == 'true' && steps.existing_branch.outputs.exists != 'true'
         env:
           TRACKER_GIT_AUTHOR_NAME: ${{ secrets.TRACKER_GIT_AUTHOR_NAME }}
@@ -115,7 +124,7 @@ jobs:
           git commit -m "${{ steps.tracker.outputs.commit_message }}"
           git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"
 
-      - name: Check whether release PR already exists
+      - name: Check whether legacy release PR already exists
         if: steps.tracker.outputs.changed == 'true'
         id: existing_pr
         env:
@@ -129,14 +138,14 @@ jobs:
             --jq '.[0].url // ""')"
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
 
-      - name: Create release PR
+      - name: Create legacy release PR
         if: steps.tracker.outputs.changed == 'true' && steps.existing_pr.outputs.url == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           body_file="$(mktemp)"
           cat > "$body_file" <<EOF
-          Prepare the next supported Codex frontier release.
+          Prepare support for an older Codex release from a fresh main checkout.
 
           - upstream release: `${{ steps.tracker.outputs.upstream_release_tag }}`
           - local release version: `v${{ steps.tracker.outputs.release_version }}`
@@ -145,5 +154,5 @@ jobs:
           gh pr create \
             --base main \
             --head "${{ steps.tracker.outputs.release_branch }}" \
-            --title "Frontier release v${{ steps.tracker.outputs.release_version }}" \
+            --title "Legacy release v${{ steps.tracker.outputs.release_version }}" \
             --body-file "$body_file"

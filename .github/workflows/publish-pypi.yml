@@ -1,13 +1,13 @@
-name: Publish PyPI
+name: Release And Publish
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - "main"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 concurrency:
@@ -30,14 +30,132 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Resolve release metadata
+        id: release
+        env:
+          PYTHONPATH: src
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import tomllib
+          from pathlib import Path
+
+          from codex_meta_agent.version_tracker import build_release_tag, normalize_release_version
+
+          pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          state = json.loads(Path(".github/codex-upstream-state.json").read_text(encoding="utf-8"))
+
+          project_version = pyproject["project"]["version"]
+          upstream_release = state["last_seen_release"]
+          upstream_tag = upstream_release["tag_name"]
+          expected_version = normalize_release_version(upstream_tag)
+          should_release = project_version == expected_version
+          release_tag = build_release_tag(upstream_tag)
+          notes_path = Path(".codex-meta-agent") / "release-notes.md"
+          notes_path.parent.mkdir(parents=True, exist_ok=True)
+          notes_path.write_text(
+              "\n".join(
+                  [
+                      f"# {release_tag}",
+                      "",
+                      f"Tracks upstream release `{upstream_tag}` ({upstream_release['name']}).",
+                      "",
+                      f"- upstream release URL: {upstream_release['html_url']}",
+                      f"- upstream release published at: {upstream_release['published_at']}",
+                      "",
+                  ]
+              ),
+              encoding="utf-8",
+          )
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"should_release={'true' if should_release else 'false'}\n")
+              handle.write(f"project_version={project_version}\n")
+              handle.write(f"expected_version={expected_version}\n")
+              handle.write(f"release_tag={release_tag}\n")
+              handle.write(f"release_name={release_tag}\n")
+              handle.write(f"upstream_release_tag={upstream_tag}\n")
+              handle.write(f"notes_path={notes_path}\n")
+
+          if not should_release:
+              print(
+                  "Skipping release: "
+                  f"project version {project_version!r} does not match upstream release version "
+                  f"{expected_version!r}."
+              )
+          PY
+
+      - name: Check whether GitHub release already exists
+        if: steps.release.outputs.should_release == 'true'
+        id: github_release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.release.outputs.release_tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check whether version already exists on PyPI
+        if: steps.release.outputs.should_release == 'true'
+        id: pypi_release
+        env:
+          PROJECT_VERSION: ${{ steps.release.outputs.project_version }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["PROJECT_VERSION"]
+          url = "https://pypi.org/project/codex-agent-sdk-unofficial/json"
+          exists = False
+
+          try:
+              with urllib.request.urlopen("https://pypi.org/pypi/codex-agent-sdk-unofficial/json") as response:
+                  payload = json.load(response)
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404:
+                  raise
+              payload = {"releases": {}}
+
+          releases = payload.get("releases", {})
+          if isinstance(releases, dict):
+              files = releases.get(version)
+              exists = isinstance(files, list) and len(files) > 0
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"exists={'true' if exists else 'false'}\n")
+
+          print(f"Checked PyPI JSON endpoint: {url}")
+          PY
+
+      - name: Create GitHub release
+        if: steps.release.outputs.should_release == 'true' && steps.github_release.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create \
+            "${{ steps.release.outputs.release_tag }}" \
+            --target "$GITHUB_SHA" \
+            --title "${{ steps.release.outputs.release_name }}" \
+            --notes-file "${{ steps.release.outputs.notes_path }}"
+
       - name: Set up uv
+        if: steps.release.outputs.should_release == 'true' && steps.pypi_release.outputs.exists != 'true'
         uses: astral-sh/setup-uv@v6
 
       - name: Build distributions
+        if: steps.release.outputs.should_release == 'true' && steps.pypi_release.outputs.exists != 'true'
         run: uv build
 
       - name: Check distributions
+        if: steps.release.outputs.should_release == 'true' && steps.pypi_release.outputs.exists != 'true'
         run: uvx twine check dist/*
 
       - name: Publish to PyPI
+        if: steps.release.outputs.should_release == 'true' && steps.pypi_release.outputs.exists != 'true'
         uses: pypa/gh-action-pypi-publish@release/v1

@@ -13,13 +13,14 @@ from codex_meta_agent.version_tracker import (
     GitHubCompareFile,
     GitHubCompareResult,
     GitHubRelease,
-    GitHubRepositoryHead,
     TrackerResponse,
     TrackingState,
     UpstreamSnapshot,
     VersionTracker,
     VersionTrackerConfig,
     build_release_tag,
+    build_tracking_branch,
+    normalize_release_version,
     parse_tracker_response,
     render_tracker_prompt,
 )
@@ -27,12 +28,6 @@ from codex_meta_agent.version_tracker import (
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-MAIN_HEAD = GitHubRepositoryHead(
-    sha="abc123def456",
-    html_url="https://github.com/openai/codex/commit/abc123def456",
-    committed_at="2026-04-15T03:48:01Z",
-    message="refresh upstream python sdk",
-)
 LATEST_RELEASE = GitHubRelease(
     tag_name="rust-v0.120.0",
     name="0.120.0",
@@ -43,14 +38,12 @@ LATEST_RELEASE = GitHubRelease(
 )
 SNAPSHOT = UpstreamSnapshot(
     repository="openai/codex",
-    branch="main",
-    main=MAIN_HEAD,
     latest_release=LATEST_RELEASE,
 )
 COMPARE = GitHubCompareResult(
-    html_url="https://github.com/openai/codex/compare/old...new",
+    html_url="https://github.com/openai/codex/compare/rust-v0.119.0...rust-v0.120.0",
     base_sha="old111",
-    head_sha=MAIN_HEAD.sha,
+    head_sha="new222",
     ahead_by=2,
     total_commits=2,
     commits=(
@@ -94,21 +87,28 @@ class FakeGitHubClient:
         *,
         snapshot: UpstreamSnapshot,
         compare: GitHubCompareResult | None = None,
+        releases_by_tag: dict[str, GitHubRelease] | None = None,
     ) -> None:
         self.snapshot = snapshot
         self.compare = compare
         self.downloaded_paths: list[tuple[str, str]] = []
-
-    def fetch_main_head(self, branch: str) -> GitHubRepositoryHead:
-        assert branch == self.snapshot.branch
-        return self.snapshot.main
+        self.compare_calls: list[tuple[str, str]] = []
+        self.releases_by_tag = {snapshot.latest_release.tag_name: snapshot.latest_release}
+        if releases_by_tag is not None:
+            self.releases_by_tag.update(releases_by_tag)
 
     def fetch_latest_release(self) -> GitHubRelease:
         return self.snapshot.latest_release
 
+    def fetch_release_by_tag(self, tag: str) -> GitHubRelease:
+        try:
+            return self.releases_by_tag[tag]
+        except KeyError as exc:
+            raise RuntimeError(f"unknown release tag: {tag}") from exc
+
     def compare_commits(self, base: str, head: str) -> GitHubCompareResult:
         assert self.compare is not None
-        assert head == self.snapshot.main.sha
+        self.compare_calls.append((base, head))
         return self.compare
 
     def download_text(self, ref: str, upstream_path: str) -> str:
@@ -116,19 +116,43 @@ class FakeGitHubClient:
         return f"downloaded from {ref}: {upstream_path}\n"
 
 
-def test_render_tracker_prompt_includes_sync_contract(tmp_path: Path) -> None:
+def write_pyproject(path: Path, version: str) -> None:
+    path.write_text(
+        "\n".join(
+            [
+                "[build-system]",
+                'requires = ["uv_build>=0.10.10,<0.11.0"]',
+                'build-backend = "uv_build"',
+                "",
+                "[project]",
+                'name = "codex-agent-sdk-unofficial"',
+                f'version = "{version}"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_render_tracker_prompt_includes_release_sync_contract(tmp_path: Path) -> None:
     prompt = render_tracker_prompt(
         repo_root=tmp_path,
         snapshot=SNAPSHOT,
+        release_version="0.120.0",
+        release_branch="puck/frontier-realese--v0.120.0",
         prior_state=None,
         compare=COMPARE,
         tracking_targets=VersionTrackerConfig().tracking_targets,
-        context_paths=(tmp_path / ".codex-meta-agent" / "upstream" / "sdk/python/README.md",),
+        context_paths=(
+            tmp_path / ".codex-meta-agent" / "upstream" / "rust-v0.120.0" / "sdk/python/README.md",
+        ),
         state_path=tmp_path / ".github" / "codex-upstream-state.json",
     )
 
-    assert "Codex Meta-Agent Branch Sync" in prompt
+    assert "Codex Meta-Agent Release Sync" in prompt
     assert "openai/codex" in prompt
+    assert "puck/frontier-realese--v0.120.0" in prompt
+    assert "v0.120.0" in prompt
     assert "sdk/python/" in prompt
     assert "codex-rs/app-server-protocol/" in prompt
     assert ".github/codex-upstream-state.json" in prompt
@@ -142,8 +166,8 @@ def test_parse_tracker_response_accepts_expected_json_shape() -> None:
                 "summary": "Updated docs and state.",
                 "changed_paths": ["README.md", "docs/upstream-tracking.md"],
                 "verification_commands": ["uv run pytest -q"],
-                "assumptions": ["GitHub Actions can push to main."],
-                "release_readiness_notes": "Prepared release notes.",
+                "assumptions": ["GitHub Actions can push tracking branches."],
+                "release_readiness_notes": "Ready for the main-branch release workflow.",
             }
         )
     )
@@ -152,8 +176,8 @@ def test_parse_tracker_response_accepts_expected_json_shape() -> None:
         summary="Updated docs and state.",
         changed_paths=("README.md", "docs/upstream-tracking.md"),
         verification_commands=("uv run pytest -q",),
-        assumptions=("GitHub Actions can push to main.",),
-        release_readiness_notes="Prepared release notes.",
+        assumptions=("GitHub Actions can push tracking branches.",),
+        release_readiness_notes="Ready for the main-branch release workflow.",
     )
 
 
@@ -172,8 +196,14 @@ def test_parse_tracker_response_rejects_non_string_lists() -> None:
         )
 
 
-def test_build_release_tag_prefixes_upstream_tag() -> None:
-    assert build_release_tag("rust-v0.120.0") == "upstream-rust-v0.120.0"
+def test_release_metadata_uses_codex_semver() -> None:
+    assert normalize_release_version("rust-v0.120.0") == "0.120.0"
+    assert build_release_tag("rust-v0.120.0") == "v0.120.0"
+    assert build_tracking_branch("rust-v0.120.0") == "puck/frontier-realese--v0.120.0"
+    assert (
+        build_tracking_branch("rust-v0.120.0", prefix="puck/flegacy-release--")
+        == "puck/flegacy-release--v0.120.0"
+    )
 
 
 def test_version_tracker_no_drift_skips_codex_and_leaves_state_untouched(tmp_path: Path) -> None:
@@ -214,17 +244,10 @@ def test_version_tracker_no_drift_skips_codex_and_leaves_state_untouched(tmp_pat
     assert "changed=false" in github_output_path.read_text(encoding="utf-8")
 
 
-def test_version_tracker_drift_updates_state_and_release_artifacts(tmp_path: Path) -> None:
+def test_version_tracker_drift_updates_state_version_and_branch_metadata(tmp_path: Path) -> None:
     repo_root = tmp_path
     previous_snapshot = UpstreamSnapshot(
         repository=SNAPSHOT.repository,
-        branch=SNAPSHOT.branch,
-        main=GitHubRepositoryHead(
-            sha="old111",
-            html_url="https://github.com/openai/codex/commit/old111",
-            committed_at="2026-04-10T00:00:00Z",
-            message="old branch state",
-        ),
         latest_release=GitHubRelease(
             tag_name="rust-v0.119.0",
             name="0.119.0",
@@ -244,6 +267,7 @@ def test_version_tracker_drift_updates_state_and_release_artifacts(tmp_path: Pat
         json.dumps(previous_state.to_dict(), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    write_pyproject(repo_root / "pyproject.toml", "0.119.0")
     github_output_path = repo_root / "github-output.txt"
     github_client = FakeGitHubClient(snapshot=SNAPSHOT, compare=COMPARE)
     prompts: list[str] = []
@@ -254,8 +278,8 @@ def test_version_tracker_drift_updates_state_and_release_artifacts(tmp_path: Pat
             summary="Updated the docs and tracking state.",
             changed_paths=("README.md", "docs/upstream-tracking.md"),
             verification_commands=("uv run pytest -q",),
-            assumptions=("main should track openai/codex main",),
-            release_readiness_notes="Ready to publish the prefixed upstream release.",
+            assumptions=("tracking should only follow upstream releases",),
+            release_readiness_notes="Ready for the main-branch release workflow.",
         )
 
     tracker = VersionTracker(
@@ -274,35 +298,161 @@ def test_version_tracker_drift_updates_state_and_release_artifacts(tmp_path: Pat
 
     result = tracker.run()
     updated_payload = json.loads(state_path.read_text(encoding="utf-8"))
-    release_notes_path = repo_root / ".codex-meta-agent" / "release-notes.md"
     response_path = repo_root / ".codex-meta-agent" / "tracker-response.json"
     output_text = github_output_path.read_text(encoding="utf-8")
 
-    assert prompts, "Codex should be invoked when branch or release drift exists."
+    assert prompts, "Codex should be invoked when release drift exists."
     assert result.changed is True
     assert result.release_needed is True
-    assert updated_payload["last_seen_main"]["sha"] == SNAPSHOT.main.sha
+    assert result.release_version == "0.120.0"
+    assert result.release_branch == "puck/frontier-realese--v0.120.0"
     assert updated_payload["last_seen_release"]["tag_name"] == SNAPSHOT.latest_release.tag_name
-    assert release_notes_path.exists()
+    assert "last_seen_main" not in updated_payload
     assert response_path.exists()
-    assert "Track openai/codex rust-v0.120.0" in release_notes_path.read_text(encoding="utf-8")
+    assert 'version = "0.120.0"' in (repo_root / "pyproject.toml").read_text(encoding="utf-8")
     assert "release_needed=true" in output_text
-    assert "release_tag=upstream-rust-v0.120.0" in output_text
-    assert github_client.downloaded_paths
+    assert "release_tag=v0.120.0" in output_text
+    assert "release_branch=puck/frontier-realese--v0.120.0" in output_text
+    assert github_client.compare_calls == [("rust-v0.119.0", "rust-v0.120.0")]
+    assert github_client.downloaded_paths == [
+        ("rust-v0.120.0", "sdk/python/src/codex_app_server/client.py"),
+        (
+            "rust-v0.120.0",
+            "codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.v2.schemas.json",
+        ),
+    ]
 
 
-def test_version_tracker_workflow_declares_daily_schedule_and_release_step() -> None:
+def test_version_tracker_target_version_backfills_prior_release_from_clean_main(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path
+    current_state = TrackingState.bootstrap(
+        SNAPSHOT,
+        updated_at="2026-04-15T00:00:00Z",
+    )
+    state_path = repo_root / ".github" / "codex-upstream-state.json"
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(current_state.to_dict(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    write_pyproject(repo_root / "pyproject.toml", "0.120.0")
+
+    prior_release = GitHubRelease(
+        tag_name="rust-v0.119.0",
+        name="0.119.0",
+        html_url="https://github.com/openai/codex/releases/tag/rust-v0.119.0",
+        published_at="2026-04-01T00:00:00Z",
+        target_commitish="main",
+        body="",
+    )
+    github_client = FakeGitHubClient(
+        snapshot=SNAPSHOT,
+        compare=COMPARE,
+        releases_by_tag={prior_release.tag_name: prior_release},
+    )
+    prompts: list[str] = []
+
+    def codex_runner(prompt: str) -> TrackerResponse:
+        prompts.append(prompt)
+        return TrackerResponse(
+            summary="Backfilled the prior tracked release.",
+            changed_paths=("README.md",),
+            verification_commands=("uv run pytest -q",),
+            assumptions=("the checkout starts from a clean main branch",),
+            release_readiness_notes="Ready for the requested prior-release branch.",
+        )
+
+    tracker = VersionTracker(
+        VersionTrackerConfig(
+            repo_root=repo_root,
+            target_version="0.119.0",
+            tracking_branch_prefix="puck/flegacy-release--",
+            run_verification=False,
+        ),
+        github_client=cast(GitHubApiClient, github_client),
+        codex_runner=codex_runner,
+        command_runner=lambda command, cwd: pytest.fail(
+            "Verification should be disabled for this focused test."
+        ),
+        now_factory=lambda: datetime(2026, 4, 16, 1, 2, 3, tzinfo=UTC),
+    )
+
+    result = tracker.run()
+    updated_payload = json.loads(state_path.read_text(encoding="utf-8"))
+    prompt_text = (repo_root / ".codex-meta-agent" / "tracker-brief.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert prompts, "Codex should be invoked when targeting a different release."
+    assert result.release_version == "0.119.0"
+    assert result.release_branch == "puck/flegacy-release--v0.119.0"
+    assert updated_payload["last_seen_release"]["tag_name"] == "rust-v0.119.0"
+    assert 'version = "0.119.0"' in (repo_root / "pyproject.toml").read_text(encoding="utf-8")
+    assert github_client.compare_calls == [("rust-v0.119.0", "rust-v0.120.0")]
+    assert github_client.downloaded_paths == [
+        ("rust-v0.119.0", "sdk/python/src/codex_app_server/client.py"),
+        (
+            "rust-v0.119.0",
+            "codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.v2.schemas.json",
+        ),
+    ]
+    assert "targeted backfill run from clean `main`" in prompt_text
+    assert "selected stable release tag: `rust-v0.119.0`" in prompt_text
+
+
+def test_version_tracker_workflow_declares_daily_schedule_and_tracking_branch_push() -> None:
     workflow = (REPO_ROOT / ".github" / "workflows" / "version-tracker.yml").read_text(
         encoding="utf-8"
     )
 
     assert 'cron: "17 6 * * *"' in workflow
     assert "workflow_dispatch:" in workflow
+    assert "base_ref:" in workflow
+    assert "target_version:" in workflow
     assert "contents: write" in workflow
+    assert "pull-requests: write" in workflow
+    assert "ref: main" in workflow
+    assert 'base_ref="${BASE_REF:-main}"' in workflow
+    assert 'git checkout --detach "origin/$base_ref"' in workflow
     assert "npm install --global @openai/codex" in workflow
     assert "uv run python -m codex_meta_agent" in workflow
-    assert "git push origin HEAD:main" in workflow
+    assert 'cmd+=(--target-version "$TARGET_VERSION")' in workflow
+    assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
+    assert 'gh pr create \\' in workflow
+    assert "Frontier release v${{ steps.tracker.outputs.release_version }}" in workflow
+    assert 'git config user.name "$author_name"' in workflow
+    assert "HEAD:main" not in workflow
+
+
+def test_legacy_release_workflow_dispatches_targeted_backfill() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "legacy-release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "workflow_dispatch:" in workflow
+    assert "base_ref:" in workflow
+    assert "target_version:" in workflow
+    assert "skip_verification:" in workflow
+    assert 'base_ref="${BASE_REF:-main}"' in workflow
+    assert "--target-version \"$TARGET_VERSION\"" in workflow
+    assert '--tracking-branch-prefix "puck/flegacy-release--"' in workflow
+    assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
+    assert 'gh pr create \\' in workflow
+    assert "Legacy release v${{ steps.tracker.outputs.release_version }}" in workflow
+
+
+def test_publish_workflow_releases_and_publishes_from_main() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "publish-pypi.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "branches:" in workflow
+    assert '- "main"' in workflow
     assert "gh release create" in workflow
+    assert "Publish to PyPI" in workflow
+    assert "https://pypi.org/project/codex-agent-sdk-unofficial/json" in workflow
 
 
 def test_committed_tracking_state_matches_expected_shape() -> None:
@@ -311,6 +461,7 @@ def test_committed_tracking_state_matches_expected_shape() -> None:
     )
 
     assert payload["upstream_repository"] == "openai/codex"
-    assert payload["tracked_branch"] == "main"
-    assert payload["last_seen_main"]["sha"]
+    assert payload["schema_version"] == "2.0"
     assert payload["last_seen_release"]["tag_name"].startswith("rust-v")
+    assert "tracked_branch" not in payload
+    assert "last_seen_main" not in payload

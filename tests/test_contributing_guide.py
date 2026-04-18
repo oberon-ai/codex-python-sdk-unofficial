@@ -45,6 +45,10 @@ class ContributingGuideTests(unittest.TestCase):
             "uv run python scripts/vendor_protocol_schema.py --allow-version-change",
             "uv run --group codegen python scripts/generate_protocol_models.py --check",
             "uv run python -m codex_meta_agent --dry-run",
+            (
+                "uv run python -m codex_meta_agent --target-version 0.119.0 "
+                "--tracking-branch-prefix puck/flegacy-release-- --skip-verification"
+            ),
         ]
 
         for command in expected_commands:

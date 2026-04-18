@@ -195,15 +195,20 @@ This repository now ships a daily GitHub Actions workflow at
 
 The workflow:
 
-- checks `openai/codex` `main` every day and on manual dispatch
-- compares the live upstream branch head and stable release tag against the
-  committed `.github/codex-upstream-state.json`
+- checks the latest stable `openai/codex` GitHub release every day and on
+  manual dispatch
+- compares that release tag against the committed
+  `.github/codex-upstream-state.json`
 - uses `python -m codex_meta_agent` plus `SyncCodexSDKClient` to let Codex
-  reconcile local code, docs, tests, and release metadata
+  reconcile local code, docs, tests, and release metadata for that release
 - runs the repository verification commands
-- commits branch-sync changes back to `main`
-- publishes a GitHub release tagged as `upstream-<upstream-tag>` when the
-  latest upstream stable release changes
+- commits release-tracking changes to
+  `puck/frontier-realese--v<version>` from a fresh `main` checkout
+- opens a pull request for that prepared frontier release branch
+- ships a separate manual workflow for backfilling older releases on
+  `puck/flegacy-release--v<version>`
+- publishes a GitHub release tagged `v<version>` and publishes the matching
+  PyPI release when that branch is merged to `main`
 
 See [docs/upstream-tracking.md](https://github.com/oberon-ai/codex-python-sdk-unofficial/blob/main/docs/upstream-tracking.md)
 for the detailed workflow contract, local dry-run command, and required GitHub
@@ -217,7 +222,7 @@ This project is licensed under the Apache License 2.0. See
 ## Project Notes
 
 - This project is unofficial and is not affiliated with OpenAI
-- This was implemented and released by Oberon AI
-- All PRs merged to main must be approved by Oberon AI's engineering team
+- This was implemented and released by the project maintainers
+- All PRs merged to main must be approved by the maintainers
 - Stable protocol artifacts are generated from vendored schema snapshots checked
   into this repository.
