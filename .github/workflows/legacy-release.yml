@@ -32,7 +32,7 @@ jobs:
     env:
       CONTROLLER_PATH: controller
       TARGET_PATH: target
-      CODEX_HOME: ${{ runner.temp }}/.codex
+      CODEX_HOME: ${{ github.workspace }}/.codex-runtime
 
     steps:
       - name: Check out workflow controller
