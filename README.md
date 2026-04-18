@@ -201,6 +201,8 @@ The workflow:
   `.github/codex-upstream-state.json`
 - uses `python -m codex_meta_agent` plus `SyncCodexSDKClient` to let Codex
   reconcile local code, docs, tests, and release metadata for that release
+- keeps the automation runtime on a controller checkout while Codex edits a
+  separate clean target checkout
 - runs the repository verification commands
 - commits release-tracking changes to
   `puck/frontier-realese--v<version>` from a fresh `main` checkout

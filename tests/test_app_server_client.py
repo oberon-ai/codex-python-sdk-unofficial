@@ -184,6 +184,39 @@ async def test_initialize_uses_shared_startup_budget_for_initialize_response(
 
 
 @pytest.mark.asyncio
+async def test_initialize_accepts_missing_protocol_version_for_current_server_builds(
+    tmp_path: Path,
+) -> None:
+    script = FakeAppServerScript.from_actions(
+        expect_request("initialize", save_as="initialize"),
+        send_response(
+            request_ref="initialize",
+            result={
+                "codexHome": "/tmp/fake-codex-home",
+                "platformFamily": "unix",
+                "platformOs": "macos",
+                "userAgent": "Codex Desktop/0.118.0",
+            },
+        ),
+        expect_notification("initialized", params={}),
+    )
+    launcher = _write_fake_codex_launcher(
+        tmp_path,
+        script,
+        stem="missing_protocol_version_initialize_launcher.py",
+    )
+
+    async with AppServerClient(AppServerConfig(codex_bin=str(launcher))) as client:
+        initialize_result = await client.initialize()
+
+    assert initialize_result.protocol_version == 2
+    assert initialize_result.codex_home == "/tmp/fake-codex-home"
+    assert initialize_result.platform_family == "unix"
+    assert initialize_result.platform_os == "macos"
+    assert initialize_result.user_agent == "Codex Desktop/0.118.0"
+
+
+@pytest.mark.asyncio
 async def test_request_before_initialize_is_blocked_locally(tmp_path: Path) -> None:
     client = AppServerClient(AppServerConfig(codex_bin=str(tmp_path / "missing-codex-binary")))
 

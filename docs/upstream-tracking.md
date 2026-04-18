@@ -15,12 +15,15 @@ The release flow is:
    repository GitHub release `v<version>` and publishes the matching PyPI
    version
 
-For manual backfills, `workflow_dispatch` can also pass a specific Codex
-release version through `.github/workflows/legacy-release.yml`. That targeted
-mode uses the branch naming convention `puck/flegacy-release--v<version>`, is
-intended for a fresh, clean `main` checkout, and keeps the Codex prompt
-focused on the release delta between the currently tracked version and the
-requested older release.
+For manual backfills, `workflow_dispatch` can pass a specific Codex release
+version through `.github/workflows/legacy-release.yml`. The existing
+`.github/workflows/version-tracker.yml` manual trigger also accepts
+`tracking_branch_prefix` and `skip_verification`, which makes it suitable for
+testing the same legacy flow before the dedicated workflow lands on `main`.
+That targeted mode uses the branch naming convention
+`puck/flegacy-release--v<version>`, is intended for a fresh, clean `main`
+checkout, and keeps the Codex prompt focused on the release delta between the
+currently tracked version and the requested older release.
 
 The local repository version follows the same semantic version number as the
 tracked Codex release. For example, upstream `rust-v0.120.0` maps to:
@@ -33,12 +36,14 @@ tracked Codex release. For example, upstream `rust-v0.120.0` maps to:
 ## Key Pieces
 
 - `.github/workflows/version-tracker.yml`
-  runs the frontier-release tracker daily and on manual dispatch, starting from
-  a fresh `main` checkout and creating a pull request when a new upstream
-  stable release exists
+  runs the frontier-release tracker daily and on manual dispatch, using a
+  controller checkout for the automation code plus a separate fresh target
+  checkout for the repository Codex edits, then creating a pull request when a
+  new upstream stable release exists
 - `.github/workflows/legacy-release.yml`
-  runs only on manual dispatch, starts from a fresh `main` checkout, and
-  prepares a legacy-release pull request for an explicitly requested version
+  runs only on manual dispatch, keeps the same controller-versus-target
+  isolation, and prepares a legacy-release pull request for an explicitly
+  requested version
 - `.github/workflows/publish-pypi.yml`
   runs on pushes to `main`, creates the GitHub release if needed, and publishes
   the matching PyPI release if that version is not already on PyPI
@@ -57,8 +62,8 @@ tracked Codex release. For example, upstream `rust-v0.120.0` maps to:
 
 The tracker workflow does the following:
 
-1. checks out the repository and installs Python, `uv`, Node.js, and the
-   Codex CLI
+1. checks out the automation controller and a separate clean target checkout,
+   then installs Python, `uv`, Node.js, and the Codex CLI
 2. reads the committed `.github/codex-upstream-state.json`
 3. fetches `openai/codex` `releases/latest` metadata from GitHub
 4. compares the latest upstream release tag against the previously tracked
@@ -66,9 +71,9 @@ The tracker workflow does the following:
 5. downloads relevant upstream files from the new release tag under tracked
    prefixes such as `sdk/python/` and `codex-rs/app-server-protocol/` into
    `.codex-meta-agent/`
-6. runs `uv run python -m codex_meta_agent`, which uses
+6. runs `uv run python -m codex_meta_agent --repo-root <target checkout>`, which uses
    `SyncCodexSDKClient` plus an enforced JSON output schema to let Codex update
-   the checked-out repository
+   the target checkout without depending on the repository it is rewriting
 7. runs the repository verification commands
 8. commits the resulting changes on `puck/frontier-realese--v<version>`
 9. creates or reuses a pull request back to `main`
@@ -137,10 +142,18 @@ Run the tracker locally but skip the project-wide verification loop:
 uv run python -m codex_meta_agent --skip-verification
 ```
 
+For local end-to-end testing, keep the controller checkout separate from the
+repository Codex edits by pointing `--repo-root` at a clean clone or worktree:
+
+```bash
+uv run python -m codex_meta_agent --repo-root /tmp/codex-target --skip-verification
+```
+
 Prepare a specific prior Codex release from a clean `main` checkout:
 
 ```bash
 uv run python -m codex_meta_agent \
+  --repo-root /tmp/codex-target \
   --target-version 0.119.0 \
   --tracking-branch-prefix puck/flegacy-release-- \
   --skip-verification

@@ -205,11 +205,12 @@ The automation is split across:
 - `.github/codex-upstream-state.json`
   the committed record of the last upstream release tag
 - `.github/workflows/version-tracker.yml`
-  the daily and manual frontier-release trigger that starts from a clean
-  `main` checkout, prepares `puck/frontier-realese--v<version>`, and opens a PR
+  the daily and manual frontier-release trigger that runs from a controller
+  checkout, prepares a separate clean target checkout, then opens a PR from
+  `puck/frontier-realese--v<version>`
 - `.github/workflows/legacy-release.yml`
-  the manual legacy-release trigger that starts from a clean `main` checkout,
-  prepares `puck/flegacy-release--v<version>`, and opens a PR
+  the manual legacy-release trigger that keeps the same controller-versus-
+  target isolation, prepares `puck/flegacy-release--v<version>`, and opens a PR
 
 The tracker uses `SyncCodexSDKClient` so the maintenance job exercises the SDK
 itself rather than bypassing it with a separate automation stack.
@@ -219,6 +220,7 @@ Useful local commands:
 ```bash
 uv run python -m codex_meta_agent --dry-run
 uv run python -m codex_meta_agent --skip-verification
+uv run python -m codex_meta_agent --repo-root /tmp/codex-target --skip-verification
 uv run python -m codex_meta_agent --target-version 0.119.0 --tracking-branch-prefix puck/flegacy-release-- --skip-verification
 ```
 

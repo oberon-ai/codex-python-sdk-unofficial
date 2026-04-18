@@ -14,6 +14,16 @@ on:
         description: "Optional Codex release version or tag to prepare instead of the latest release"
         required: false
         type: string
+      tracking_branch_prefix:
+        description: "Optional branch prefix for manual runs; defaults to frontier releases"
+        required: false
+        default: "puck/frontier-realese--"
+        type: string
+      skip_verification:
+        description: "Skip repository verification after Codex updates the target checkout"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -26,22 +36,38 @@ concurrency:
 jobs:
   track-upstream-release:
     runs-on: ubuntu-latest
+    env:
+      CONTROLLER_PATH: controller
+      TARGET_PATH: target
 
     steps:
-      - name: Check out repository
+      - name: Check out workflow controller
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          clean: true
+          path: controller
+
+      - name: Check out target repository
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
           clean: true
+          path: target
 
-      - name: Ensure fresh main checkout
+      - name: Ensure fresh target checkout
         env:
           BASE_REF: ${{ inputs.base_ref }}
+        working-directory: ${{ env.TARGET_PATH }}
         run: |
           base_ref="${BASE_REF:-main}"
           git fetch origin "$base_ref"
-          git checkout --detach "origin/$base_ref"
+          if git show-ref --verify --quiet "refs/remotes/origin/$base_ref"; then
+            git checkout --detach "origin/$base_ref"
+          else
+            git checkout --detach FETCH_HEAD
+          fi
           if [ -n "$(git status --porcelain)" ]; then
             echo "Expected a clean checkout before running the tracker." >&2
             git status --short >&2
@@ -68,6 +94,7 @@ jobs:
         run: codex --version
 
       - name: Sync project environment
+        working-directory: ${{ env.CONTROLLER_PATH }}
         run: uv sync --group codegen
 
       - name: Run upstream version tracker
@@ -76,16 +103,31 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TARGET_VERSION: ${{ inputs.target_version }}
+          TRACKING_BRANCH_PREFIX: ${{ inputs.tracking_branch_prefix }}
+          SKIP_VERIFICATION: ${{ inputs.skip_verification }}
+          TARGET_REPO: ${{ github.workspace }}/target
+        working-directory: ${{ env.CONTROLLER_PATH }}
         run: |
-          cmd=(uv run python -m codex_meta_agent --github-output "$GITHUB_OUTPUT")
+          tracking_branch_prefix="${TRACKING_BRANCH_PREFIX:-puck/frontier-realese--}"
+          skip_verification="${SKIP_VERIFICATION:-false}"
+          cmd=(
+            uv run python -m codex_meta_agent
+            --repo-root "$TARGET_REPO"
+            --github-output "$GITHUB_OUTPUT"
+            --tracking-branch-prefix "$tracking_branch_prefix"
+          )
           if [ -n "$TARGET_VERSION" ]; then
             cmd+=(--target-version "$TARGET_VERSION")
+          fi
+          if [ "$skip_verification" = "true" ]; then
+            cmd+=(--skip-verification)
           fi
           "${cmd[@]}"
 
       - name: Check whether tracking branch already exists
         if: steps.tracker.outputs.changed == 'true'
         id: existing_branch
+        working-directory: ${{ env.TARGET_PATH }}
         run: |
           if git ls-remote --exit-code --heads origin "${{ steps.tracker.outputs.release_branch }}" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -99,6 +141,7 @@ jobs:
           TRACKER_GIT_AUTHOR_NAME: ${{ secrets.TRACKER_GIT_AUTHOR_NAME }}
           TRACKER_GIT_AUTHOR_EMAIL: ${{ secrets.TRACKER_GIT_AUTHOR_EMAIL }}
           GITHUB_ACTOR_NAME: ${{ github.actor }}
+        working-directory: ${{ env.TARGET_PATH }}
         run: |
           author_name="${TRACKER_GIT_AUTHOR_NAME:-$GITHUB_ACTOR_NAME}"
           if [ -n "$TRACKER_GIT_AUTHOR_EMAIL" ]; then
@@ -120,6 +163,7 @@ jobs:
         id: existing_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: ${{ env.TARGET_PATH }}
         run: |
           pr_url="$(gh pr list \
             --base main \
@@ -133,10 +177,18 @@ jobs:
         if: steps.tracker.outputs.changed == 'true' && steps.existing_pr.outputs.url == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: ${{ env.TARGET_PATH }}
         run: |
+          if [[ "${{ steps.tracker.outputs.release_branch }}" == puck/flegacy-release--* ]]; then
+            title="Legacy release v${{ steps.tracker.outputs.release_version }}"
+            intro="Prepare support for an older Codex release from a fresh clean base checkout."
+          else
+            title="Frontier release v${{ steps.tracker.outputs.release_version }}"
+            intro="Prepare the next supported Codex frontier release."
+          fi
           body_file="$(mktemp)"
           cat > "$body_file" <<EOF
-          Prepare the next supported Codex frontier release.
+          $intro
 
           - upstream release: `${{ steps.tracker.outputs.upstream_release_tag }}`
           - local release version: `v${{ steps.tracker.outputs.release_version }}`
@@ -145,5 +197,5 @@ jobs:
           gh pr create \
             --base main \
             --head "${{ steps.tracker.outputs.release_branch }}" \
-            --title "Frontier release v${{ steps.tracker.outputs.release_version }}" \
+            --title "$title" \
             --body-file "$body_file"

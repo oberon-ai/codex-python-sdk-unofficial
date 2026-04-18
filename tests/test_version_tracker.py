@@ -411,17 +411,28 @@ def test_version_tracker_workflow_declares_daily_schedule_and_tracking_branch_pu
     assert "workflow_dispatch:" in workflow
     assert "base_ref:" in workflow
     assert "target_version:" in workflow
+    assert "tracking_branch_prefix:" in workflow
+    assert "skip_verification:" in workflow
     assert "contents: write" in workflow
     assert "pull-requests: write" in workflow
+    assert "path: controller" in workflow
+    assert "path: target" in workflow
     assert "ref: main" in workflow
     assert 'base_ref="${BASE_REF:-main}"' in workflow
     assert 'git checkout --detach "origin/$base_ref"' in workflow
+    assert 'git checkout --detach FETCH_HEAD' in workflow
     assert "npm install --global @openai/codex" in workflow
+    assert "working-directory: ${{ env.CONTROLLER_PATH }}" in workflow
+    assert "working-directory: ${{ env.TARGET_PATH }}" in workflow
     assert "uv run python -m codex_meta_agent" in workflow
+    assert '--repo-root "$TARGET_REPO"' in workflow
+    assert '--tracking-branch-prefix "$tracking_branch_prefix"' in workflow
     assert 'cmd+=(--target-version "$TARGET_VERSION")' in workflow
+    assert 'cmd+=(--skip-verification)' in workflow
     assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
     assert 'gh pr create \\' in workflow
     assert "Frontier release v${{ steps.tracker.outputs.release_version }}" in workflow
+    assert "Legacy release v${{ steps.tracker.outputs.release_version }}" in workflow
     assert 'git config user.name "$author_name"' in workflow
     assert "HEAD:main" not in workflow
 
@@ -435,7 +446,13 @@ def test_legacy_release_workflow_dispatches_targeted_backfill() -> None:
     assert "base_ref:" in workflow
     assert "target_version:" in workflow
     assert "skip_verification:" in workflow
+    assert "path: controller" in workflow
+    assert "path: target" in workflow
     assert 'base_ref="${BASE_REF:-main}"' in workflow
+    assert 'git checkout --detach FETCH_HEAD' in workflow
+    assert "working-directory: ${{ env.CONTROLLER_PATH }}" in workflow
+    assert "working-directory: ${{ env.TARGET_PATH }}" in workflow
+    assert '--repo-root "$TARGET_REPO"' in workflow
     assert "--target-version \"$TARGET_VERSION\"" in workflow
     assert '--tracking-branch-prefix "puck/flegacy-release--"' in workflow
     assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
