@@ -41,7 +41,7 @@ jobs:
           import tomllib
           from pathlib import Path
 
-          from codex_meta_agent.version_tracker import build_release_tag, normalize_release_version
+          from codex_meta_agent.release_metadata import build_release_tag, normalize_release_version
 
           pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
           state = json.loads(Path(".github/codex-upstream-state.json").read_text(encoding="utf-8"))
