@@ -40,6 +40,10 @@ Package releases are versioned from `pyproject.toml` and published to PyPI.
 Before the first release, configure PyPI Trusted Publishing for this GitHub
 repository and the `.github/workflows/publish-pypi.yml` workflow.
 
+If you need a token-based fallback instead, set repository or organization
+variable `PYPI_PUBLISH_AUTH_MODE=api-token` and provide `PYPI_API_TOKEN` as a
+repository secret or a `pypi` environment secret.
+
 Recommended release flow:
 
 1. Set the next package version in `pyproject.toml`.

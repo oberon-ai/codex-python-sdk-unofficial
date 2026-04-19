@@ -177,7 +177,16 @@ The workflows expect:
 - optionally `TRACKER_GIT_AUTHOR_NAME` and `TRACKER_GIT_AUTHOR_EMAIL`
   as repository or environment secrets when you want automated commits to use a
   specific identity instead of the triggering actor
-- a configured PyPI trusted publishing environment named `pypi`
+- either PyPI Trusted Publishing configured for this repository and
+  `.github/workflows/publish-pypi.yml`, or
+- repository or organization variable `PYPI_PUBLISH_AUTH_MODE=api-token` plus
+  a `PYPI_API_TOKEN` secret on the repository or `pypi` environment
+
+The publish workflow defaults to Trusted Publishing without attaching a GitHub
+environment to the PyPI upload job. That keeps the OIDC claim set aligned with
+PyPI publisher setups that do not specify a GitHub environment. If you prefer a
+token-based fallback, switch the workflow into `api-token` mode and provide the
+token as a GitHub secret.
 
 If branch protections or action restrictions block branch pushes or release
 creation, the workflow contract will need to change accordingly.
