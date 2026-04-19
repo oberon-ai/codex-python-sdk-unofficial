@@ -75,7 +75,7 @@ wheels = [
 
 [[package]]
 name = "codex-agent-sdk-unofficial"
-version = "0.1.0"
+version = "0.119.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },

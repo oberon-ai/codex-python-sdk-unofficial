@@ -18,12 +18,16 @@ from pathlib import Path
 from typing import Any
 
 from codex_agent_sdk import AppServerConfig, CodexOptions, SyncCodexSDKClient
+from .release_metadata import (
+    DEFAULT_RELEASE_TAG_PREFIX,
+    build_release_tag,
+    normalize_release_version,
+)
 
 DEFAULT_UPSTREAM_REPOSITORY = "openai/codex"
 DEFAULT_STATE_PATH = Path(".github/codex-upstream-state.json")
 DEFAULT_CONTEXT_DIR = Path(".codex-meta-agent")
 DEFAULT_PROJECT_VERSION_PATH = Path("pyproject.toml")
-DEFAULT_RELEASE_TAG_PREFIX = "v"
 DEFAULT_TRACKING_BRANCH_PREFIX = "puck/frontier-realese--"
 DEFAULT_VERIFICATION_COMMANDS: tuple[tuple[str, ...], ...] = (
     ("uv", "run", "pytest", "-q"),
@@ -753,33 +757,12 @@ def parse_tracker_response(text: str) -> TrackerResponse:
     )
 
 
-def build_release_tag(upstream_tag: str, *, prefix: str = DEFAULT_RELEASE_TAG_PREFIX) -> str:
-    return f"{prefix}{normalize_release_version(upstream_tag)}"
-
-
 def build_tracking_branch(
     upstream_tag: str,
     *,
     prefix: str = DEFAULT_TRACKING_BRANCH_PREFIX,
 ) -> str:
     return f"{prefix}v{normalize_release_version(upstream_tag)}"
-
-
-def normalize_release_version(upstream_tag: str) -> str:
-    tag = upstream_tag.strip()
-    semver_pattern = (
-        r"\d+\.\d+\.\d+"
-        r"(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?"
-        r"(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?"
-    )
-    for pattern in (
-        rf"^(?:.+-)?v(?P<version>{semver_pattern})$",
-        rf"^(?P<version>{semver_pattern})$",
-    ):
-        match = re.fullmatch(pattern, tag)
-        if match is not None:
-            return match.group("version")
-    raise ValueError(f"Upstream release tag {upstream_tag!r} does not contain a semver version.")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -471,6 +471,8 @@ def test_publish_workflow_releases_and_publishes_from_main() -> None:
 
     assert "branches:" in workflow
     assert '- "main"' in workflow
+    assert "codex_meta_agent.release_metadata" in workflow
+    assert "codex_meta_agent.version_tracker" not in workflow
     assert "gh release create" in workflow
     assert "Publish to PyPI" in workflow
     assert "https://pypi.org/project/codex-agent-sdk-unofficial/json" in workflow
