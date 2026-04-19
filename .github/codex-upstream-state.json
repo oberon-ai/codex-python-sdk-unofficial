@@ -1,20 +1,13 @@
 {
-  "last_seen_main": {
-    "committed_at": "2026-04-15T03:48:01Z",
-    "html_url": "https://github.com/openai/codex/commit/d34bc66466670630ec9ca080c775e279c66d536a",
-    "message": "sandbox: remove dead seatbelt helper and update tests (#17859)",
-    "sha": "d34bc66466670630ec9ca080c775e279c66d536a"
-  },
   "last_seen_release": {
     "body": "",
-    "html_url": "https://github.com/openai/codex/releases/tag/rust-v0.120.0",
-    "name": "0.120.0",
-    "published_at": "2026-04-11T02:53:49Z",
-    "tag_name": "rust-v0.120.0",
+    "html_url": "https://github.com/openai/codex/releases/tag/rust-v0.119.0",
+    "name": "0.119.0",
+    "published_at": "2026-04-10T22:44:21Z",
+    "tag_name": "rust-v0.119.0",
     "target_commitish": "main"
   },
-  "schema_version": "1.0",
-  "tracked_branch": "main",
-  "updated_at": "2026-04-15T04:06:20Z",
+  "schema_version": "2.0",
+  "updated_at": "2026-04-18T23:56:57Z",
   "upstream_repository": "openai/codex"
 }

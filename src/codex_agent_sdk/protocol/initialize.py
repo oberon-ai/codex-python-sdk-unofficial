@@ -6,6 +6,8 @@ from pydantic import ConfigDict, Field
 
 from .pydantic import WireModel, validate_response_payload
 
+DEFAULT_PROTOCOL_VERSION = 2
+
 
 class InitializeServerCapabilities(WireModel):
     """Known server-declared capabilities returned from ``initialize``."""
@@ -42,7 +44,11 @@ class InitializeResult(WireModel):
         extra="allow",
     )
 
-    protocol_version: int = Field(alias="protocolVersion")
+    # Current Codex builds may omit protocolVersion while still speaking v2.
+    protocol_version: int = Field(
+        alias="protocolVersion",
+        default=DEFAULT_PROTOCOL_VERSION,
+    )
     server_info: InitializeServerInfo | None = Field(alias="serverInfo", default=None)
     capabilities: InitializeServerCapabilities | None = None
     codex_home: str | None = Field(alias="codexHome", default=None)
@@ -62,6 +68,7 @@ def parse_initialize_result(payload: object) -> InitializeResult:
 
 
 __all__ = [
+    "DEFAULT_PROTOCOL_VERSION",
     "InitializeResult",
     "InitializeServerCapabilities",
     "InitializeServerInfo",

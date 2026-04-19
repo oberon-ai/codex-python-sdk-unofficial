@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import textwrap
 import urllib.error
@@ -19,10 +20,11 @@ from typing import Any
 from codex_agent_sdk import AppServerConfig, CodexOptions, SyncCodexSDKClient
 
 DEFAULT_UPSTREAM_REPOSITORY = "openai/codex"
-DEFAULT_UPSTREAM_BRANCH = "main"
 DEFAULT_STATE_PATH = Path(".github/codex-upstream-state.json")
 DEFAULT_CONTEXT_DIR = Path(".codex-meta-agent")
-DEFAULT_RELEASE_TAG_PREFIX = "upstream-"
+DEFAULT_PROJECT_VERSION_PATH = Path("pyproject.toml")
+DEFAULT_RELEASE_TAG_PREFIX = "v"
+DEFAULT_TRACKING_BRANCH_PREFIX = "puck/frontier-realese--"
 DEFAULT_VERIFICATION_COMMANDS: tuple[tuple[str, ...], ...] = (
     ("uv", "run", "pytest", "-q"),
     ("uv", "run", "mypy"),
@@ -57,14 +59,6 @@ TRACKER_OUTPUT_SCHEMA: dict[str, object] = {
     ],
     "additionalProperties": False,
 }
-
-
-@dataclass(frozen=True, slots=True)
-class GitHubRepositoryHead:
-    sha: str
-    html_url: str
-    committed_at: str
-    message: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,8 +158,6 @@ DEFAULT_TRACKING_TARGETS: tuple[UpstreamTrackingTarget, ...] = (
 @dataclass(frozen=True, slots=True)
 class UpstreamSnapshot:
     repository: str
-    branch: str
-    main: GitHubRepositoryHead
     latest_release: GitHubRelease
 
 
@@ -173,18 +165,14 @@ class UpstreamSnapshot:
 class TrackingState:
     schema_version: str
     upstream_repository: str
-    tracked_branch: str
-    last_seen_main: GitHubRepositoryHead
     last_seen_release: GitHubRelease
     updated_at: str
 
     @classmethod
     def bootstrap(cls, snapshot: UpstreamSnapshot, *, updated_at: str) -> TrackingState:
         return cls(
-            schema_version="1.0",
+            schema_version="2.0",
             upstream_repository=snapshot.repository,
-            tracked_branch=snapshot.branch,
-            last_seen_main=snapshot.main,
             last_seen_release=GitHubRelease(
                 tag_name=snapshot.latest_release.tag_name,
                 name=snapshot.latest_release.name,
@@ -201,8 +189,6 @@ class TrackingState:
         return cls(
             schema_version=_require_string(payload, "schema_version"),
             upstream_repository=_require_string(payload, "upstream_repository"),
-            tracked_branch=_require_string(payload, "tracked_branch"),
-            last_seen_main=GitHubRepositoryHead(**_require_dict(payload, "last_seen_main")),
             last_seen_release=GitHubRelease(**_require_dict(payload, "last_seen_release")),
             updated_at=_require_string(payload, "updated_at"),
         )
@@ -222,16 +208,16 @@ class TrackerResponse:
 
 @dataclass(frozen=True, slots=True)
 class VersionTrackerResult:
-    branch_drift: bool
     release_drift: bool
     changed: bool
     release_needed: bool
+    release_version: str
+    release_branch: str
     commit_message: str
     snapshot: UpstreamSnapshot
     state: TrackingState
     prompt_path: Path
     response_path: Path | None
-    release_notes_path: Path | None
     context_paths: tuple[Path, ...] = ()
 
 
@@ -240,9 +226,11 @@ class VersionTrackerConfig:
     repo_root: Path = Path.cwd()
     state_path: Path = field(default_factory=lambda: DEFAULT_STATE_PATH)
     context_dir: Path = field(default_factory=lambda: DEFAULT_CONTEXT_DIR)
+    project_version_path: Path = field(default_factory=lambda: DEFAULT_PROJECT_VERSION_PATH)
     upstream_repository: str = DEFAULT_UPSTREAM_REPOSITORY
-    upstream_branch: str = DEFAULT_UPSTREAM_BRANCH
     release_tag_prefix: str = DEFAULT_RELEASE_TAG_PREFIX
+    tracking_branch_prefix: str = DEFAULT_TRACKING_BRANCH_PREFIX
+    target_version: str | None = None
     codex_bin: str = "codex"
     model: str = "gpt-5.4"
     github_token: str | None = None
@@ -259,28 +247,27 @@ class VersionTrackerConfig:
     def resolved_context_dir(self) -> Path:
         return self.repo_root / self.context_dir
 
+    def resolved_project_version_path(self) -> Path:
+        return self.repo_root / self.project_version_path
+
 
 class GitHubApiClient:
     def __init__(self, repository: str, *, token: str | None = None) -> None:
         self.repository = repository
         self._token = token
 
-    def fetch_main_head(self, branch: str) -> GitHubRepositoryHead:
-        payload = self._fetch_json(f"/repos/{self.repository}/commits/{branch}")
-        commit = payload.get("commit")
-        if not isinstance(commit, dict):
-            raise RuntimeError("GitHub commit payload did not include a nested commit object.")
-        committer = commit.get("committer")
-        if not isinstance(committer, dict):
-            raise RuntimeError("GitHub commit payload did not include committer metadata.")
-        message = commit.get("message")
-        if not isinstance(message, str):
-            raise RuntimeError("GitHub commit payload did not include a commit message.")
-        return GitHubRepositoryHead(
-            sha=_require_string(payload, "sha"),
+    def fetch_release_by_tag(self, tag: str) -> GitHubRelease:
+        payload = self._fetch_json(
+            f"/repos/{self.repository}/releases/tags/{urllib.parse.quote(tag, safe='')}"
+        )
+        tag_name = _require_string(payload, "tag_name")
+        return GitHubRelease(
+            tag_name=tag_name,
+            name=_optional_string(payload, "name") or tag_name,
             html_url=_require_string(payload, "html_url"),
-            committed_at=_require_string(committer, "date"),
-            message=message.splitlines()[0],
+            published_at=_require_string(payload, "published_at"),
+            target_commitish=_require_string(payload, "target_commitish"),
+            body=_optional_string(payload, "body") or "",
         )
 
     def fetch_latest_release(self) -> GitHubRelease:
@@ -415,15 +402,17 @@ class VersionTracker:
         self._now_factory = now_factory or (lambda: datetime.now(UTC))
 
     def run(self) -> VersionTrackerResult:
-        snapshot = UpstreamSnapshot(
-            repository=self.config.upstream_repository,
-            branch=self.config.upstream_branch,
-            main=self._github.fetch_main_head(self.config.upstream_branch),
-            latest_release=self._github.fetch_latest_release(),
-        )
         state_path = self.config.resolved_state_path()
         state = _load_tracking_state(state_path)
-        branch_drift = state is None or state.last_seen_main.sha != snapshot.main.sha
+        snapshot = UpstreamSnapshot(
+            repository=self.config.upstream_repository,
+            latest_release=self._resolve_target_release(state=state),
+        )
+        release_version = normalize_release_version(snapshot.latest_release.tag_name)
+        release_branch = build_tracking_branch(
+            snapshot.latest_release.tag_name,
+            prefix=self.config.tracking_branch_prefix,
+        )
         release_drift = (
             state is None or state.last_seen_release.tag_name != snapshot.latest_release.tag_name
         )
@@ -432,18 +421,28 @@ class VersionTracker:
         context_dir.mkdir(parents=True, exist_ok=True)
         prompt_path = context_dir / "tracker-brief.md"
         response_path: Path | None = None
-        release_notes_path: Path | None = None
         context_paths: tuple[Path, ...] = ()
 
         compare = None
-        if state is not None and branch_drift:
-            compare = self._github.compare_commits(state.last_seen_main.sha, snapshot.main.sha)
+        if state is not None and release_drift:
+            compare_base, compare_head = _order_compare_release_tags(
+                state.last_seen_release,
+                snapshot.latest_release,
+            )
+            compare = self._github.compare_commits(compare_base, compare_head)
 
-        if branch_drift or release_drift:
+        if release_drift:
             context_paths = self._download_upstream_context(compare=compare, snapshot=snapshot)
+            if self.config.apply_changes:
+                _sync_project_version(
+                    self.config.resolved_project_version_path(),
+                    release_version,
+                )
             prompt = render_tracker_prompt(
                 repo_root=self.config.repo_root,
                 snapshot=snapshot,
+                release_version=release_version,
+                release_branch=release_branch,
                 prior_state=state,
                 compare=compare,
                 tracking_targets=self.config.tracking_targets,
@@ -467,44 +466,33 @@ class VersionTracker:
 
         updated_state = TrackingState.bootstrap(snapshot, updated_at=_utc_now(self._now_factory))
 
-        changed = branch_drift or release_drift
-        commit_message = _commit_message(
-            snapshot,
-            branch_drift=branch_drift,
-            release_drift=release_drift,
-        )
-        if self.config.apply_changes and (branch_drift or release_drift):
+        changed = release_drift
+        commit_message = _commit_message(snapshot)
+        if self.config.apply_changes and release_drift:
             _write_tracking_state(state_path, updated_state)
-        else:
-            changed = False if not (branch_drift or release_drift) else changed
-        if release_drift and self.config.apply_changes:
-            release_notes_path = context_dir / "release-notes.md"
-            release_notes_path.write_text(
-                _render_release_notes(snapshot=snapshot, compare=compare),
-                encoding="utf-8",
-            )
 
         self._write_github_outputs(
             changed=changed,
             release_needed=release_drift,
+            release_version=release_version,
+            release_branch=release_branch,
             commit_message=commit_message,
             snapshot=snapshot,
             prompt_path=prompt_path,
             response_path=response_path,
-            release_notes_path=release_notes_path,
         )
 
         return VersionTrackerResult(
-            branch_drift=branch_drift,
             release_drift=release_drift,
             changed=changed,
             release_needed=release_drift,
+            release_version=release_version,
+            release_branch=release_branch,
             commit_message=commit_message,
             snapshot=snapshot,
             state=updated_state,
             prompt_path=prompt_path,
             response_path=response_path,
-            release_notes_path=release_notes_path,
             context_paths=context_paths,
         )
 
@@ -526,11 +514,13 @@ class VersionTracker:
         ][: self.config.max_context_files]
         if not tracked_files:
             return ()
-        context_root = self.config.resolved_context_dir() / "upstream" / snapshot.main.sha
+        context_root = (
+            self.config.resolved_context_dir() / "upstream" / snapshot.latest_release.tag_name
+        )
         paths: list[Path] = []
         for file in tracked_files:
             try:
-                text = self._github.download_text(snapshot.branch, file.filename)
+                text = self._github.download_text(snapshot.latest_release.tag_name, file.filename)
             except RuntimeError:
                 continue
             destination = context_root / file.filename
@@ -584,11 +574,12 @@ class VersionTracker:
         *,
         changed: bool,
         release_needed: bool,
+        release_version: str,
+        release_branch: str,
         commit_message: str,
         snapshot: UpstreamSnapshot,
         prompt_path: Path,
         response_path: Path | None,
-        release_notes_path: Path | None,
     ) -> None:
         output_path = self.config.github_output_path
         if output_path is None:
@@ -596,25 +587,68 @@ class VersionTracker:
         values = {
             "changed": _bool_text(changed),
             "release_needed": _bool_text(release_needed),
+            "release_version": release_version,
+            "release_branch": release_branch,
             "commit_message": commit_message,
-            "upstream_main_sha": snapshot.main.sha,
             "upstream_release_tag": snapshot.latest_release.tag_name,
             "prompt_path": str(prompt_path),
             "release_tag": build_release_tag(
                 snapshot.latest_release.tag_name,
                 prefix=self.config.release_tag_prefix,
             ),
-            "release_name": _release_name(snapshot.latest_release),
+            "release_name": _release_name(snapshot.latest_release, release_version=release_version),
             "response_path": str(response_path) if response_path is not None else "",
-            "release_notes_path": str(release_notes_path) if release_notes_path is not None else "",
         }
         _write_github_outputs(output_path, values)
+
+    def _resolve_target_release(self, *, state: TrackingState | None) -> GitHubRelease:
+        if self.config.target_version is None:
+            return self._github.fetch_latest_release()
+
+        normalized_version = normalize_release_version(self.config.target_version)
+        candidate_tags: list[str] = []
+        raw_target = self.config.target_version.strip()
+        if raw_target:
+            candidate_tags.append(raw_target)
+
+        tag_templates: list[str] = []
+        if state is not None:
+            tag_templates.append(state.last_seen_release.tag_name)
+        else:
+            tag_templates.append(self._github.fetch_latest_release().tag_name)
+
+        candidate_tags.extend(
+            _replace_release_version(template, normalized_version) for template in tag_templates
+        )
+        candidate_tags.extend(
+            (
+                f"rust-v{normalized_version}",
+                f"v{normalized_version}",
+                normalized_version,
+            )
+        )
+
+        last_error: RuntimeError | None = None
+        for candidate in _dedupe_release_tags(candidate_tags):
+            try:
+                return self._github.fetch_release_by_tag(candidate)
+            except RuntimeError as exc:
+                last_error = exc
+
+        requested = self.config.target_version
+        detail = f" Last GitHub error: {last_error}" if last_error is not None else ""
+        raise RuntimeError(
+            "Could not resolve upstream release "
+            f"{requested!r} in {self.config.upstream_repository}.{detail}"
+        )
 
 
 def render_tracker_prompt(
     *,
     repo_root: Path,
     snapshot: UpstreamSnapshot,
+    release_version: str,
+    release_branch: str,
     prior_state: TrackingState | None,
     compare: GitHubCompareResult | None,
     tracking_targets: Sequence[UpstreamTrackingTarget],
@@ -623,6 +657,7 @@ def render_tracker_prompt(
 ) -> str:
     compare_block = _render_compare_block(compare)
     prior_block = _render_prior_state(prior_state)
+    sync_mode_block = _render_sync_mode(prior_state, snapshot.latest_release)
     context_block = _render_context_paths(context_paths)
     target_block = "\n".join(
         f"- `{target.upstream_prefix}` -> {', '.join(f'`{path}`' for path in target.local_paths)}\n"
@@ -631,24 +666,28 @@ def render_tracker_prompt(
     )
     return textwrap.dedent(
         f"""\
-        # Codex Meta-Agent Branch Sync
+        # Codex Meta-Agent Release Sync
 
         Update the repository at `{repo_root}` so it stays aligned with `{snapshot.repository}`.
 
         ## Upstream Snapshot
 
-        - tracked branch: `{snapshot.branch}`
-        - latest upstream main commit: `{snapshot.main.sha}` ({snapshot.main.committed_at})
-        - main commit summary: {snapshot.main.message}
-        - main commit URL: {snapshot.main.html_url}
-        - latest stable release tag: `{snapshot.latest_release.tag_name}`
-        - stable release name: `{snapshot.latest_release.name}`
-        - stable release published at: {snapshot.latest_release.published_at}
-        - stable release URL: {snapshot.latest_release.html_url}
+        - selected stable release tag: `{snapshot.latest_release.tag_name}`
+        - normalized local release version: `{release_version}`
+        - tracking branch to prepare: `{release_branch}`
+        - local GitHub release tag to publish after merge:
+          `{build_release_tag(snapshot.latest_release.tag_name)}`
+        - selected release name: `{snapshot.latest_release.name}`
+        - selected release published at: {snapshot.latest_release.published_at}
+        - selected release URL: {snapshot.latest_release.html_url}
 
         ## Previously Tracked State
 
         {prior_block}
+
+        ## Sync Mode
+
+        {sync_mode_block}
 
         ## Relevant Upstream Drift
 
@@ -665,14 +704,22 @@ def render_tracker_prompt(
         ## Required Repository Work
 
         - Update code, docs, tests, and release plumbing as needed so this repo
-          tracks upstream drift cleanly.
+          tracks upstream release drift cleanly.
         - Keep the automation implementation under `src/codex_meta_agent/`.
         - Use existing repository scripts when they fit instead of inventing
           parallel workflows.
-        - Always update `{state_path}` to the latest upstream commit and
-          release metadata by the end of the run.
-        - If upstream stable release drift exists, leave the repo ready for a
-          GitHub release tagged with the prefixed upstream tag.
+        - Keep this repository's package version and GitHub release version in
+          sync with the normalized upstream release version `{release_version}`.
+        - If the selected release predates the release already tracked on
+          `main`, treat this as a targeted backfill from a clean `main`
+          checkout and keep edits limited to the upstream delta between those
+          two releases.
+        - Always update `{state_path}` to the latest upstream release metadata
+          by the end of the run.
+        - Leave the repository ready to be committed on branch
+          `{release_branch}` and released as
+          `{build_release_tag(snapshot.latest_release.tag_name)}` after merge
+          to `main`.
         - Prefer deterministic edits and verification over speculative changes.
         - Do not edit files under `{DEFAULT_CONTEXT_DIR}` except for generated
           run artifacts.
@@ -707,7 +754,32 @@ def parse_tracker_response(text: str) -> TrackerResponse:
 
 
 def build_release_tag(upstream_tag: str, *, prefix: str = DEFAULT_RELEASE_TAG_PREFIX) -> str:
-    return f"{prefix}{upstream_tag}"
+    return f"{prefix}{normalize_release_version(upstream_tag)}"
+
+
+def build_tracking_branch(
+    upstream_tag: str,
+    *,
+    prefix: str = DEFAULT_TRACKING_BRANCH_PREFIX,
+) -> str:
+    return f"{prefix}v{normalize_release_version(upstream_tag)}"
+
+
+def normalize_release_version(upstream_tag: str) -> str:
+    tag = upstream_tag.strip()
+    semver_pattern = (
+        r"\d+\.\d+\.\d+"
+        r"(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?"
+        r"(?:\+[0-9A-Za-z][0-9A-Za-z.-]*)?"
+    )
+    for pattern in (
+        rf"^(?:.+-)?v(?P<version>{semver_pattern})$",
+        rf"^(?P<version>{semver_pattern})$",
+    ):
+        match = re.fullmatch(pattern, tag)
+        if match is not None:
+            return match.group("version")
+    raise ValueError(f"Upstream release tag {upstream_tag!r} does not contain a semver version.")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -739,11 +811,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="GitHub repository slug to track.",
     )
     parser.add_argument(
-        "--upstream-branch",
-        default=DEFAULT_UPSTREAM_BRANCH,
-        help="Upstream branch to compare against.",
-    )
-    parser.add_argument(
         "--model",
         default="gpt-5.4",
         help="Codex model name to use for the maintenance run.",
@@ -757,6 +824,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--release-tag-prefix",
         default=DEFAULT_RELEASE_TAG_PREFIX,
         help="Prefix to add before upstream stable release tags in this repository.",
+    )
+    parser.add_argument(
+        "--tracking-branch-prefix",
+        default=DEFAULT_TRACKING_BRANCH_PREFIX,
+        help="Prefix to use when creating tracking branches for prepared releases.",
+    )
+    parser.add_argument(
+        "--target-version",
+        help=(
+            "Optional upstream release version or tag to prepare instead of releases/latest. "
+            "Use this from a clean main checkout when backfilling a prior Codex release."
+        ),
     )
     parser.add_argument(
         "--dry-run",
@@ -776,10 +855,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         state_path=Path(args.state_path),
         context_dir=Path(args.context_dir),
         upstream_repository=args.upstream_repository,
-        upstream_branch=args.upstream_branch,
         release_tag_prefix=args.release_tag_prefix,
+        tracking_branch_prefix=args.tracking_branch_prefix,
         codex_bin=args.codex_bin,
         model=args.model,
+        target_version=args.target_version,
         github_token=github_token,
         github_output_path=Path(args.github_output) if args.github_output else None,
         apply_changes=not args.dry_run,
@@ -793,7 +873,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _render_compare_block(compare: GitHubCompareResult | None) -> str:
     if compare is None:
         return (
-            "- no prior tracked commit is available, so this run must bootstrap "
+            "- no prior tracked release is available, so this run must bootstrap "
             "from the latest upstream snapshot."
         )
     file_lines = [
@@ -826,12 +906,43 @@ def _render_prior_state(prior_state: TrackingState | None) -> str:
         return "- no committed state file exists yet; this is a bootstrap run."
     return textwrap.dedent(
         f"""\
-        - previous main commit: `{prior_state.last_seen_main.sha}`
-          ({prior_state.last_seen_main.committed_at})
-        - previous main summary: {prior_state.last_seen_main.message}
         - previous stable release: `{prior_state.last_seen_release.tag_name}`
           ({prior_state.last_seen_release.published_at})
         - state last updated at: {prior_state.updated_at}
+        """
+    ).strip()
+
+
+def _render_sync_mode(
+    prior_state: TrackingState | None,
+    target_release: GitHubRelease,
+) -> str:
+    if prior_state is None:
+        return (
+            "- bootstrap run: no release is recorded yet, so align the repository directly to "
+            "the selected release."
+        )
+
+    current_release = prior_state.last_seen_release
+    if current_release.tag_name == target_release.tag_name:
+        return "- no release drift: the selected release already matches the committed state."
+
+    if target_release.published_at < current_release.published_at:
+        return textwrap.dedent(
+            f"""\
+            - targeted backfill run from clean `main`: the checked-out repository currently tracks
+              `{current_release.tag_name}`, but this run should prepare `{target_release.tag_name}`.
+            - use the upstream compare window only as the minimal change set between those
+              releases, then adapt or revert only the mapped local files needed to match the
+              selected release.
+            """
+        ).strip()
+
+    return textwrap.dedent(
+        f"""\
+        - forward tracking run: the checked-out repository currently tracks
+          `{current_release.tag_name}`, and this run should prepare `{target_release.tag_name}`.
+        - use the upstream compare window as the minimal release delta to carry forward locally.
         """
     ).strip()
 
@@ -842,59 +953,33 @@ def _render_context_paths(paths: Sequence[Path]) -> str:
     return "\n".join(f"- `{path}`" for path in paths)
 
 
-def _render_release_notes(
-    *,
-    snapshot: UpstreamSnapshot,
-    compare: GitHubCompareResult | None,
-) -> str:
-    compare_summary = (
-        f"- upstream compare URL: {compare.html_url}\n"
-        f"- upstream commits in compare window: {compare.total_commits}\n"
-        if compare is not None
-        else "- this release was prepared during a bootstrap run with no previous compare window.\n"
-    )
-    upstream_body = snapshot.latest_release.body.strip() or "_Upstream release body was empty._"
-    return textwrap.dedent(
-        f"""\
-        # Track {snapshot.repository} {snapshot.latest_release.tag_name}
-
-        This repository release tracks the upstream stable release
-        `{snapshot.latest_release.tag_name}` (`{snapshot.latest_release.name}`).
-
-        - upstream release URL: {snapshot.latest_release.html_url}
-        - upstream release published at: {snapshot.latest_release.published_at}
-        - upstream main commit evaluated by the tracker: `{snapshot.main.sha}`
-        {compare_summary}
-
-        ## Upstream Release Notes
-
-        {upstream_body}
-        """
-    )
+def _release_name(release: GitHubRelease, *, release_version: str) -> str:
+    del release
+    return f"v{release_version}"
 
 
-def _release_name(release: GitHubRelease) -> str:
-    return f"Track openai/codex {release.tag_name}"
-
-
-def _commit_message(
-    snapshot: UpstreamSnapshot,
-    *,
-    branch_drift: bool,
-    release_drift: bool,
-) -> str:
-    if branch_drift and release_drift:
-        return (
-            f"chore: track {snapshot.repository} {snapshot.branch} @ {snapshot.main.sha[:12]} "
-            f"and {snapshot.latest_release.tag_name}"
-        )
-    if release_drift:
-        return f"chore: track {snapshot.repository} release {snapshot.latest_release.tag_name}"
-    return f"chore: track {snapshot.repository} {snapshot.branch} @ {snapshot.main.sha[:12]}"
+def _commit_message(snapshot: UpstreamSnapshot) -> str:
+    return f"chore: track {snapshot.repository} release {snapshot.latest_release.tag_name}"
 
 
 def _utc_now(now_factory: Callable[[], datetime]) -> str:
     return now_factory().astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _sync_project_version(path: Path, version: str) -> None:
+    if not path.exists():
+        raise RuntimeError(f"Project version file does not exist: {path}")
+    original = path.read_text(encoding="utf-8")
+    updated, replacements = re.subn(
+        r'(?m)^(version\s*=\s*)"[^\"]+"$',
+        rf'\1"{version}"',
+        original,
+        count=1,
+    )
+    if replacements != 1:
+        raise RuntimeError(f"Could not update the project version in {path}.")
+    if updated != original:
+        path.write_text(updated, encoding="utf-8")
 
 
 def _load_tracking_state(path: Path) -> TrackingState | None:
@@ -927,6 +1012,34 @@ def _write_github_outputs(path: Path, values: dict[str, str]) -> None:
 
 def _bool_text(value: bool) -> str:
     return "true" if value else "false"
+
+
+def _dedupe_release_tags(tags: Sequence[str]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for tag in tags:
+        cleaned = tag.strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        ordered.append(cleaned)
+    return tuple(ordered)
+
+
+def _order_compare_release_tags(
+    first: GitHubRelease,
+    second: GitHubRelease,
+) -> tuple[str, str]:
+    if first.published_at <= second.published_at:
+        return first.tag_name, second.tag_name
+    return second.tag_name, first.tag_name
+
+
+def _replace_release_version(tag_template: str, version: str) -> str:
+    current_version = normalize_release_version(tag_template)
+    if tag_template.endswith(current_version):
+        return f"{tag_template[:-len(current_version)]}{version}"
+    return version
 
 
 def _require_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:

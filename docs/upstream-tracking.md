@@ -1,47 +1,118 @@
 # Upstream Tracking Automation
 
-This repository now includes an automated tracker for `openai/codex`.
+This repository includes an automated tracker for stable `openai/codex`
+releases.
 
-The goal is twofold:
+The release flow is:
 
-- the `main` branch of this repository should keep pace with the upstream
-  `main` branch
-- GitHub releases in this repository should track upstream stable releases
+1. the scheduled tracker checks whether `openai/codex` published a newer stable
+   GitHub release than the one recorded in
+   `.github/codex-upstream-state.json`
+2. if a new upstream release exists, the tracker prepares a branch named
+   `puck/frontier-realese--v<version>` from a fresh `main` checkout
+3. the tracker opens a pull request from that branch back to `main`
+4. after that branch is merged to `main`, GitHub Actions creates the
+   repository GitHub release `v<version>` and publishes the matching PyPI
+   version
+
+For manual backfills, `workflow_dispatch` can pass a specific Codex release
+version through `.github/workflows/legacy-release.yml`. The existing
+`.github/workflows/version-tracker.yml` manual trigger also accepts
+`tracking_branch_prefix` and `skip_verification`, which makes it suitable for
+testing the same legacy flow before the dedicated workflow lands on `main`.
+That targeted mode uses the branch naming convention
+`puck/flegacy-release--v<version>`, is intended for a fresh, clean `main`
+checkout, and keeps the Codex prompt focused on the release delta between the
+currently tracked version and the requested older release.
+
+The local repository version follows the same semantic version number as the
+tracked Codex release. For example, upstream `rust-v0.120.0` maps to:
+
+- frontier branch: `puck/frontier-realese--v0.120.0`
+- legacy backfill branch: `puck/flegacy-release--v0.120.0`
+- repository GitHub release tag: `v0.120.0`
+- PyPI package version: `0.120.0`
 
 ## Key Pieces
 
 - `.github/workflows/version-tracker.yml`
-  runs the tracker daily and also supports manual `workflow_dispatch` runs.
+  runs the frontier-release tracker daily and on manual dispatch, using a
+  controller checkout for the automation code plus a separate fresh target
+  checkout for the repository Codex edits, then creating a pull request when a
+  new upstream stable release exists
+- `.github/workflows/legacy-release.yml`
+  runs only on manual dispatch, keeps the same controller-versus-target
+  isolation, and prepares a legacy-release pull request for an explicitly
+  requested version
+- `.github/workflows/publish-pypi.yml`
+  runs on pushes to `main`, creates the GitHub release if needed, and publishes
+  the matching PyPI release if that version is not already on PyPI
 - `.github/codex-upstream-state.json`
-  records the last upstream `main` commit and stable release tag that this
-  repository has already evaluated.
+  records the latest upstream stable release tag that this repository has
+  already evaluated
 - `src/codex_meta_agent/version_tracker.py`
-  fetches live GitHub metadata, prepares focused upstream context files, uses
-  `SyncCodexSDKClient` to let Codex update the repository, and emits release
-  metadata for the workflow.
+  fetches live GitHub release metadata, prepares focused upstream context
+  files, uses `SyncCodexSDKClient` to let Codex update the repository, and
+  emits structured branch and release metadata for GitHub Actions
 - `.codex-meta-agent/`
   is a gitignored working directory for prompt briefs, upstream context files,
-  structured response JSON, and generated release notes.
+  structured response JSON, and workflow-generated release notes
 
 ## Workflow Contract
 
 The tracker workflow does the following:
 
-1. checks out the repository and installs Python, `uv`, Node.js, and the
-   Codex CLI
-2. reads the committed `.github/codex-upstream-state.json`
-3. fetches the live upstream `main` head and `releases/latest` metadata from
-   GitHub
-4. compares the upstream branch head against the previously tracked commit
-5. downloads relevant upstream files under tracked prefixes such as
-   `sdk/python/` and `codex-rs/app-server-protocol/` into `.codex-meta-agent/`
-6. runs `uv run python -m codex_meta_agent`, which uses
+1. checks out the automation controller and a separate clean target checkout,
+   then installs Python, `uv`, Node.js, and the Codex CLI
+2. bootstraps a clean headless Codex auth home by piping the
+   `OPENAI_API_KEY` secret through `codex login --with-api-key`
+3. reads the committed `.github/codex-upstream-state.json`
+4. fetches `openai/codex` `releases/latest` metadata from GitHub
+5. compares the latest upstream release tag against the previously tracked
+   release tag
+6. downloads relevant upstream files from the new release tag under tracked
+   prefixes such as `sdk/python/` and `codex-rs/app-server-protocol/` into
+   `.codex-meta-agent/`
+7. runs `uv run python -m codex_meta_agent --repo-root <target checkout>`, which uses
    `SyncCodexSDKClient` plus an enforced JSON output schema to let Codex update
-   the checked-out repository
-7. runs the repository verification commands
-8. commits branch-sync changes back to `main`
-9. creates a GitHub release tagged as `upstream-<upstream-tag>` when the
-   upstream stable release tag changed
+   the target checkout without depending on the repository it is rewriting
+8. runs the repository verification commands
+9. commits the resulting changes on `puck/frontier-realese--v<version>`
+10. creates or reuses a pull request back to `main`
+
+The manual legacy-release workflow does the same preparation flow, but requires
+an explicit target version and uses `puck/flegacy-release--v<version>` for the
+branch name.
+
+The deployment workflow on `main` then:
+
+1. reads `pyproject.toml` plus `.github/codex-upstream-state.json`
+2. verifies that the package version matches the normalized upstream release
+   version
+3. creates the repository GitHub release `v<version>` if it does not already
+   exist
+4. publishes the package to PyPI if that version has not already been uploaded
+
+## Git Author Configuration
+
+The tracking workflow commits as `puck-by-oberon`.
+
+Configure that by setting the repository variable
+`TRACKER_GIT_AUTHOR_EMAIL` to the GitHub email you want attached to those
+commits, ideally the account's noreply email.
+
+The workflow uses:
+
+- `git config user.name "puck-by-oberon"`
+- `git config user.email "$TRACKER_GIT_AUTHOR_EMAIL"`
+
+You do not need a personal access token just to author commits with that name
+and email. The default `GITHUB_TOKEN` is enough to push the tracking branch in
+most repositories.
+
+You would only need a token from the `puck-by-oberon` account if you want the
+GitHub API actions themselves to authenticate as that user instead of
+`github-actions[bot]`, or if repository policy blocks the default token.
 
 ## Why The Tracker Uses The SDK
 
@@ -59,16 +130,6 @@ The tracker therefore uses:
   so the workflow receives structured summary data instead of trying to parse
   ad hoc prose
 
-## Release Tagging Policy
-
-This repository prefixes upstream release tags before publishing them here:
-
-- upstream tag: `rust-v0.120.0`
-- repository release tag: `upstream-rust-v0.120.0`
-
-The prefix keeps the repository free to adopt its own project versioning later
-without colliding with the upstream tag namespace.
-
 ## Local Commands
 
 Dry-run the tracker without invoking Codex or mutating the committed state:
@@ -83,19 +144,40 @@ Run the tracker locally but skip the project-wide verification loop:
 uv run python -m codex_meta_agent --skip-verification
 ```
 
+For local end-to-end testing, keep the controller checkout separate from the
+repository Codex edits by pointing `--repo-root` at a clean clone or worktree:
+
+```bash
+uv run python -m codex_meta_agent --repo-root /tmp/codex-target --skip-verification
+```
+
+Prepare a specific prior Codex release from a clean `main` checkout:
+
+```bash
+uv run python -m codex_meta_agent \
+  --repo-root /tmp/codex-target \
+  --target-version 0.119.0 \
+  --tracking-branch-prefix puck/flegacy-release-- \
+  --skip-verification
+```
+
 By default the tracker writes temporary artifacts under `.codex-meta-agent/`
 and updates `.github/codex-upstream-state.json`.
 
 ## GitHub Actions Requirements
 
-The workflow expects:
+The workflows expect:
 
 - `OPENAI_API_KEY`
-  so the Codex CLI can authenticate in GitHub Actions
+  so the workflow can bootstrap headless Codex auth with
+  `codex login --with-api-key`
 - `GITHUB_TOKEN`
-  so the tracker can read GitHub metadata at higher rate limits and the
-  workflow can push commits and publish releases
-- permission for GitHub Actions to push back to `main`
+  so the tracker can read GitHub metadata, push tracking branches, create pull
+  requests, and create repository releases
+- optionally `TRACKER_GIT_AUTHOR_NAME` and `TRACKER_GIT_AUTHOR_EMAIL`
+  as repository or environment secrets when you want automated commits to use a
+  specific identity instead of the triggering actor
+- a configured PyPI trusted publishing environment named `pypi`
 
-If branch protections block direct pushes, the workflow contract will need to
-change to create pull requests instead.
+If branch protections or action restrictions block branch pushes or release
+creation, the workflow contract will need to change accordingly.
