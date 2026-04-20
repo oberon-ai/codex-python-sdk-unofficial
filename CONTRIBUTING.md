@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for contributing to `codex-agent-sdk-unofficial`.
+Thanks for contributing to `codex-python-sdk-unofficial`.
 
 This repository is an unofficial, preview-stage Python SDK for the Codex
 app-server protocol. Contributions that improve correctness, documentation,

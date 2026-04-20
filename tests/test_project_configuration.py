@@ -17,7 +17,7 @@ class ProjectConfigurationTests(unittest.TestCase):
         self.assertEqual(build_system["build-backend"], "uv_build")
         self.assertIn("uv_build>=0.10.10,<0.11.0", build_system["requires"])
         self.assertEqual(project["requires-python"], ">=3.11")
-        self.assertEqual(project["name"], "codex-agent-sdk-unofficial")
+        self.assertEqual(project["name"], "codex-python-sdk-unofficial")
 
     def test_dependency_groups_include_quality_and_codegen_tools(self) -> None:
         dependency_groups = PYPROJECT_DATA["dependency-groups"]

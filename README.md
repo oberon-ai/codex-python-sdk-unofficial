@@ -1,4 +1,4 @@
-# Unofficial Codex Python SDK (`codex-agent-sdk-unofficial`)
+# Unofficial Codex Python SDK (`codex-python-sdk-unofficial`)
 
 Unofficial Python SDK for the Codex app-server protocol.
 
@@ -40,13 +40,13 @@ directly.
 Install from PyPI:
 
 ```bash
-pip install codex-agent-sdk-unofficial
+pip install codex-python-sdk-unofficial
 ```
 
 Or with `uv`:
 
 ```bash
-uv add codex-agent-sdk-unofficial
+uv add codex-python-sdk-unofficial
 ```
 
 Install from a checkout for local development:

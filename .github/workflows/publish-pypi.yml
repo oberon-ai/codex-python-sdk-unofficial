@@ -112,11 +112,11 @@ jobs:
           import urllib.request
 
           version = os.environ["PROJECT_VERSION"]
-          url = "https://pypi.org/project/codex-agent-sdk-unofficial/json"
+          url = "https://pypi.org/project/codex-python-sdk-unofficial/json"
           exists = False
 
           try:
-              with urllib.request.urlopen("https://pypi.org/pypi/codex-agent-sdk-unofficial/json") as response:
+              with urllib.request.urlopen("https://pypi.org/pypi/codex-python-sdk-unofficial/json") as response:
                   payload = json.load(response)
           except urllib.error.HTTPError as exc:
               if exc.code != 404:
@@ -171,7 +171,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/codex-agent-sdk-unofficial/
+      url: https://pypi.org/project/codex-python-sdk-unofficial/
     outputs:
       publish_mode: ${{ steps.mode.outputs.publish_mode }}
 
@@ -197,7 +197,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/codex-agent-sdk-unofficial/
+      url: https://pypi.org/project/codex-python-sdk-unofficial/
 
     steps:
       - name: Download distributions

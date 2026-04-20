@@ -3,7 +3,7 @@ requires = ["uv_build>=0.10.10,<0.11.0"]
 build-backend = "uv_build"
 
 [project]
-name = "codex-agent-sdk-unofficial"
+name = "codex-python-sdk-unofficial"
 version = "0.119.0"
 description = "Unofficial, natively async Python SDK for Codex app-server over JSON-RPC v2 on stdio."
 readme = "README.md"

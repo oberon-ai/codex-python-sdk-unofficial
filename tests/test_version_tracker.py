@@ -125,7 +125,7 @@ def write_pyproject(path: Path, version: str) -> None:
                 'build-backend = "uv_build"',
                 "",
                 "[project]",
-                'name = "codex-agent-sdk-unofficial"',
+                'name = "codex-python-sdk-unofficial"',
                 f'version = "{version}"',
                 "",
             ]
@@ -486,7 +486,7 @@ def test_publish_workflow_releases_and_publishes_from_main() -> None:
     assert "publish_via_trusted_publishing:" in workflow
     assert "publish_mode=trusted" in workflow
     assert "Publish to PyPI with trusted publishing" in workflow
-    assert "https://pypi.org/project/codex-agent-sdk-unofficial/json" in workflow
+    assert "https://pypi.org/project/codex-python-sdk-unofficial/json" in workflow
 
 
 def test_committed_tracking_state_matches_expected_shape() -> None:

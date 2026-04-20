@@ -138,16 +138,16 @@ class GeneratedProtocolModelsTests(unittest.TestCase):
     def test_generated_models_validate_request_params(self) -> None:
         initialize = self.generated.InitializeParams(
             client_info={
-                "name": "codex-agent-sdk-unofficial",
+                "name": "codex-python-sdk-unofficial",
                 "version": "0.0.0",
             }
         )
-        self.assertEqual(initialize.client_info.name, "codex-agent-sdk-unofficial")
+        self.assertEqual(initialize.client_info.name, "codex-python-sdk-unofficial")
         self.assertEqual(
             initialize.model_dump(),
             {
                 "clientInfo": {
-                    "name": "codex-agent-sdk-unofficial",
+                    "name": "codex-python-sdk-unofficial",
                     "version": "0.0.0",
                 }
             },
