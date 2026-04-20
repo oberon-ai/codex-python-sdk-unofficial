@@ -1,13 +1,13 @@
 {
   "last_seen_release": {
     "body": "",
-    "html_url": "https://github.com/openai/codex/releases/tag/rust-v0.119.0",
-    "name": "0.119.0",
-    "published_at": "2026-04-10T22:44:21Z",
-    "tag_name": "rust-v0.119.0",
+    "html_url": "https://github.com/openai/codex/releases/tag/rust-v0.118.0",
+    "name": "0.118.0",
+    "published_at": "2026-03-31T17:02:18Z",
+    "tag_name": "rust-v0.118.0",
     "target_commitish": "main"
   },
   "schema_version": "2.0",
-  "updated_at": "2026-04-18T23:56:57Z",
+  "updated_at": "2026-04-20T10:21:06Z",
   "upstream_repository": "openai/codex"
 }
