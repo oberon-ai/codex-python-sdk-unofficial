@@ -165,24 +165,41 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  publish_via_token:
-    if: needs.prepare_release.outputs.should_release == 'true' && needs.prepare_release.outputs.pypi_exists != 'true' && vars.PYPI_PUBLISH_AUTH_MODE == 'api-token'
+  resolve_publish_mode:
+    if: needs.prepare_release.outputs.should_release == 'true' && needs.prepare_release.outputs.pypi_exists != 'true'
     needs: prepare_release
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/codex-agent-sdk-unofficial/
+    outputs:
+      publish_mode: ${{ steps.mode.outputs.publish_mode }}
+
+    steps:
+      - name: Resolve PyPI publish mode
+        id: mode
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -n "$PYPI_API_TOKEN" ]; then
+            echo "publish_mode=api-token" >> "$GITHUB_OUTPUT"
+            echo "Using PyPI API token fallback."
+          else
+            echo "publish_mode=trusted" >> "$GITHUB_OUTPUT"
+            echo "Using PyPI trusted publishing."
+          fi
+
+  publish_via_token:
+    if: needs.resolve_publish_mode.outputs.publish_mode == 'api-token'
+    needs:
+      - prepare_release
+      - resolve_publish_mode
     runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/project/codex-agent-sdk-unofficial/
 
     steps:
-      - name: Validate PyPI API token configuration
-        env:
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          if [ -z "$PYPI_API_TOKEN" ]; then
-            echo "PYPI_PUBLISH_AUTH_MODE=api-token requires a PYPI_API_TOKEN secret on the repository or pypi environment." >&2
-            exit 1
-          fi
-
       - name: Download distributions
         uses: actions/download-artifact@v4
         with:
@@ -196,8 +213,10 @@ jobs:
           packages-dir: dist
 
   publish_via_trusted_publishing:
-    if: needs.prepare_release.outputs.should_release == 'true' && needs.prepare_release.outputs.pypi_exists != 'true' && vars.PYPI_PUBLISH_AUTH_MODE != 'api-token'
-    needs: prepare_release
+    if: needs.resolve_publish_mode.outputs.publish_mode == 'trusted'
+    needs:
+      - prepare_release
+      - resolve_publish_mode
     runs-on: ubuntu-latest
 
     steps:
