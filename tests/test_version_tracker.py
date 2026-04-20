@@ -486,6 +486,7 @@ def test_publish_workflow_releases_and_publishes_from_main() -> None:
     assert "publish_via_trusted_publishing:" in workflow
     assert "publish_mode=trusted" in workflow
     assert "Publish to PyPI with trusted publishing" in workflow
+    assert 'name: pypi' in workflow
     assert "https://pypi.org/project/codex-python-sdk-unofficial/json" in workflow
 
 
