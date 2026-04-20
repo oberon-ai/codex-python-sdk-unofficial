@@ -201,8 +201,8 @@ def test_release_metadata_uses_codex_semver() -> None:
     assert build_release_tag("rust-v0.120.0") == "v0.120.0"
     assert build_tracking_branch("rust-v0.120.0") == "puck/frontier-realese--v0.120.0"
     assert (
-        build_tracking_branch("rust-v0.120.0", prefix="puck/flegacy-release--")
-        == "puck/flegacy-release--v0.120.0"
+        build_tracking_branch("rust-v0.120.0", prefix="puck/backport-release--")
+        == "puck/backport-release--v0.120.0"
     )
 
 
@@ -323,7 +323,7 @@ def test_version_tracker_drift_updates_state_version_and_branch_metadata(tmp_pat
     ]
 
 
-def test_version_tracker_target_version_backfills_prior_release_from_clean_main(
+def test_version_tracker_target_version_backports_prior_release_from_clean_main(
     tmp_path: Path,
 ) -> None:
     repo_root = tmp_path
@@ -368,7 +368,7 @@ def test_version_tracker_target_version_backfills_prior_release_from_clean_main(
         VersionTrackerConfig(
             repo_root=repo_root,
             target_version="0.119.0",
-            tracking_branch_prefix="puck/flegacy-release--",
+            tracking_branch_prefix="puck/backport-release--",
             run_verification=False,
         ),
         github_client=cast(GitHubApiClient, github_client),
@@ -387,7 +387,7 @@ def test_version_tracker_target_version_backfills_prior_release_from_clean_main(
 
     assert prompts, "Codex should be invoked when targeting a different release."
     assert result.release_version == "0.119.0"
-    assert result.release_branch == "puck/flegacy-release--v0.119.0"
+    assert result.release_branch == "puck/backport-release--v0.119.0"
     assert updated_payload["last_seen_release"]["tag_name"] == "rust-v0.119.0"
     assert 'version = "0.119.0"' in (repo_root / "pyproject.toml").read_text(encoding="utf-8")
     assert github_client.compare_calls == [("rust-v0.119.0", "rust-v0.120.0")]
@@ -398,7 +398,7 @@ def test_version_tracker_target_version_backfills_prior_release_from_clean_main(
             "codex-rs/app-server-protocol/schema/json/codex_app_server_protocol.v2.schemas.json",
         ),
     ]
-    assert "targeted backfill run from clean `main`" in prompt_text
+    assert "targeted backport run from clean `main`" in prompt_text
     assert "selected stable release tag: `rust-v0.119.0`" in prompt_text
 
 
@@ -432,7 +432,7 @@ def test_version_tracker_workflow_declares_daily_schedule_and_tracking_branch_pu
     assert 'cmd+=(--target-version "$TARGET_VERSION")' in workflow
     assert 'cmd+=(--skip-verification)' in workflow
     assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
-    assert 'tag_name="legacy-v${{ steps.tracker.outputs.release_version }}"' in workflow
+    assert 'tag_name="backport-v${{ steps.tracker.outputs.release_version }}"' in workflow
     assert 'git push origin "refs/tags/$tag_name"' in workflow
     assert 'gh pr create \\' in workflow
     assert "Frontier release v${{ steps.tracker.outputs.release_version }}" in workflow
@@ -440,8 +440,8 @@ def test_version_tracker_workflow_declares_daily_schedule_and_tracking_branch_pu
     assert "HEAD:main" not in workflow
 
 
-def test_legacy_release_workflow_dispatches_targeted_backfill() -> None:
-    workflow = (REPO_ROOT / ".github" / "workflows" / "legacy-release.yml").read_text(
+def test_backport_release_workflow_dispatches_targeted_backport() -> None:
+    workflow = (REPO_ROOT / ".github" / "workflows" / "backport-release.yml").read_text(
         encoding="utf-8"
     )
 
@@ -459,9 +459,9 @@ def test_legacy_release_workflow_dispatches_targeted_backfill() -> None:
     assert "working-directory: ${{ env.TARGET_PATH }}" in workflow
     assert '--repo-root "$TARGET_REPO"' in workflow
     assert "--target-version \"$TARGET_VERSION\"" in workflow
-    assert '--tracking-branch-prefix "puck/flegacy-release--"' in workflow
+    assert '--tracking-branch-prefix "puck/backport-release--"' in workflow
     assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
-    assert 'tag_name="legacy-v${{ steps.tracker.outputs.release_version }}"' in workflow
+    assert 'tag_name="backport-v${{ steps.tracker.outputs.release_version }}"' in workflow
     assert 'git push origin "refs/tags/$tag_name"' in workflow
     assert 'gh pr create \\' not in workflow
 

@@ -207,9 +207,9 @@ The workflow:
 - commits release-tracking changes to
   `puck/frontier-realese--v<version>` from a fresh `main` checkout
 - opens a pull request for that prepared frontier release branch
-- ships a separate manual workflow for backfilling older releases on
-  `puck/flegacy-release--v<version>`
-- marks legacy backfill branch heads with `legacy-v<version>` tags instead of
+- ships a separate manual workflow for backporting older releases on
+  `puck/backport-release--v<version>`
+- marks backport branch heads with `backport-v<version>` tags instead of
   merging them back to `main`
 - publishes a GitHub release tagged `v<version>` and publishes the matching
   PyPI release when that branch is merged to `main`

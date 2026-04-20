@@ -212,10 +212,10 @@ The automation is split across:
   the daily and manual frontier-release trigger that runs from a controller
   checkout, prepares a separate clean target checkout, then opens a PR from
   `puck/frontier-realese--v<version>`
-- `.github/workflows/legacy-release.yml`
-  the manual legacy-release trigger that keeps the same controller-versus-
-  target isolation, prepares `puck/flegacy-release--v<version>`, and tags that
-  dead-end branch head as `legacy-v<version>` instead of opening a PR
+- `.github/workflows/backport-release.yml`
+  the manual backport-release trigger that keeps the same controller-versus-
+  target isolation, prepares `puck/backport-release--v<version>`, and tags that
+  dead-end branch head as `backport-v<version>` instead of opening a PR
 
 The tracker uses `SyncCodexSDKClient` so the maintenance job exercises the SDK
 itself rather than bypassing it with a separate automation stack.
@@ -226,16 +226,16 @@ Useful local commands:
 uv run python -m codex_meta_agent --dry-run
 uv run python -m codex_meta_agent --skip-verification
 uv run python -m codex_meta_agent --repo-root /tmp/codex-target --skip-verification
-uv run python -m codex_meta_agent --target-version 0.119.0 --tracking-branch-prefix puck/flegacy-release-- --skip-verification
+uv run python -m codex_meta_agent --target-version 0.119.0 --tracking-branch-prefix puck/backport-release-- --skip-verification
 ```
 
 The workflow assumes:
 
-- GitHub Actions is allowed to push release-prep branches and legacy tags, and
+- GitHub Actions is allowed to push release-prep branches and backport tags, and
   to open frontier pull requests against `main`
 - `OPENAI_API_KEY` is available to the runner
 - the mainline release tags in this repository use the normalized `v<version>`
-  format, while legacy dead-end branches use `legacy-v<version>`
+  format, while backport dead-end branches use `backport-v<version>`
 
 ## Dependency Changes
 

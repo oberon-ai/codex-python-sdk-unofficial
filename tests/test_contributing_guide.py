@@ -47,7 +47,7 @@ class ContributingGuideTests(unittest.TestCase):
             "uv run python -m codex_meta_agent --dry-run",
             (
                 "uv run python -m codex_meta_agent --target-version 0.119.0 "
-                "--tracking-branch-prefix puck/flegacy-release-- --skip-verification"
+                "--tracking-branch-prefix puck/backport-release-- --skip-verification"
             ),
         ]
 

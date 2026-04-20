@@ -15,23 +15,23 @@ The release flow is:
    repository GitHub release `v<version>` and publishes the matching PyPI
    version
 
-For manual backfills, `workflow_dispatch` can pass a specific Codex release
-version through `.github/workflows/legacy-release.yml`. The existing
+For manual backports, `workflow_dispatch` can pass a specific Codex release
+version through `.github/workflows/backport-release.yml`. The existing
 `.github/workflows/version-tracker.yml` manual trigger also accepts
 `tracking_branch_prefix` and `skip_verification`, which makes it suitable for
-testing the same legacy flow before the dedicated workflow lands on `main`.
+testing the same backport flow before the dedicated workflow lands on `main`.
 That targeted mode uses the branch naming convention
-`puck/flegacy-release--v<version>`, is intended for a fresh, clean `main`
+`puck/backport-release--v<version>`, is intended for a fresh, clean `main`
 checkout, keeps the Codex prompt focused on the release delta between the
 currently tracked version and the requested older release, and treats the
-resulting branch as a dead-end branch marked with `legacy-v<version>`.
+resulting branch as a dead-end branch marked with `backport-v<version>`.
 
 The local repository version follows the same semantic version number as the
 tracked Codex release. For example, upstream `rust-v0.120.0` maps to:
 
 - frontier branch: `puck/frontier-realese--v0.120.0`
-- legacy backfill branch: `puck/flegacy-release--v0.120.0`
-- legacy dead-end tag: `legacy-v0.120.0`
+- backport branch: `puck/backport-release--v0.120.0`
+- backport dead-end tag: `backport-v0.120.0`
 - repository GitHub release tag: `v0.120.0`
 - PyPI package version: `0.120.0`
 
@@ -42,10 +42,10 @@ tracked Codex release. For example, upstream `rust-v0.120.0` maps to:
   controller checkout for the automation code plus a separate fresh target
   checkout for the repository Codex edits, then creating a pull request when a
   new upstream stable release exists
-- `.github/workflows/legacy-release.yml`
+- `.github/workflows/backport-release.yml`
   runs only on manual dispatch, keeps the same controller-versus-target
-  isolation, and prepares a dead-end legacy-release branch plus a matching
-  `legacy-v<version>` tag for an explicitly requested version
+  isolation, and prepares a dead-end backport-release branch plus a matching
+  `backport-v<version>` tag for an explicitly requested version
 - `.github/workflows/publish-pypi.yml`
   runs on pushes to `main`, creates the GitHub release if needed, and publishes
   the matching PyPI release if that version is not already on PyPI
@@ -82,10 +82,11 @@ The tracker workflow does the following:
 9. commits the resulting changes on `puck/frontier-realese--v<version>`
 10. creates or reuses a pull request back to `main`
 
-The manual legacy-release workflow does the same preparation flow, but requires
-an explicit target version, uses `puck/flegacy-release--v<version>` for the
-branch name, and tags the resulting branch head as `legacy-v<version>` instead
-of opening a pull request back to `main`.
+The manual backport-release workflow does the same preparation flow, but
+requires an explicit target version, uses
+`puck/backport-release--v<version>` for the branch name, and tags the
+resulting branch head as `backport-v<version>` instead of opening a pull
+request back to `main`.
 
 The deployment workflow on `main` then:
 
@@ -160,7 +161,7 @@ Prepare a specific prior Codex release from a clean `main` checkout:
 uv run python -m codex_meta_agent \
   --repo-root /tmp/codex-target \
   --target-version 0.119.0 \
-  --tracking-branch-prefix puck/flegacy-release-- \
+  --tracking-branch-prefix puck/backport-release-- \
   --skip-verification
 ```
 

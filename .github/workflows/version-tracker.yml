@@ -143,12 +143,12 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Check whether legacy tag already exists
-        if: steps.tracker.outputs.changed == 'true' && startsWith(steps.tracker.outputs.release_branch, 'puck/flegacy-release--')
+      - name: Check whether backport tag already exists
+        if: steps.tracker.outputs.changed == 'true' && startsWith(steps.tracker.outputs.release_branch, 'puck/backport-release--')
         id: existing_tag
         working-directory: ${{ env.TARGET_PATH }}
         run: |
-          tag_name="legacy-v${{ steps.tracker.outputs.release_version }}"
+          tag_name="backport-v${{ steps.tracker.outputs.release_version }}"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag_name" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
@@ -179,15 +179,15 @@ jobs:
           git commit -m "${{ steps.tracker.outputs.commit_message }}"
           git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"
 
-      - name: Check out existing legacy branch head
-        if: steps.tracker.outputs.changed == 'true' && startsWith(steps.tracker.outputs.release_branch, 'puck/flegacy-release--') && steps.existing_branch.outputs.exists == 'true' && steps.existing_tag.outputs.exists != 'true'
+      - name: Check out existing backport branch head
+        if: steps.tracker.outputs.changed == 'true' && startsWith(steps.tracker.outputs.release_branch, 'puck/backport-release--') && steps.existing_branch.outputs.exists == 'true' && steps.existing_tag.outputs.exists != 'true'
         working-directory: ${{ env.TARGET_PATH }}
         run: |
           git fetch origin "${{ steps.tracker.outputs.release_branch }}"
           git checkout --detach FETCH_HEAD
 
-      - name: Tag legacy branch head
-        if: steps.tracker.outputs.changed == 'true' && startsWith(steps.tracker.outputs.release_branch, 'puck/flegacy-release--') && steps.existing_tag.outputs.exists != 'true'
+      - name: Tag backport branch head
+        if: steps.tracker.outputs.changed == 'true' && startsWith(steps.tracker.outputs.release_branch, 'puck/backport-release--') && steps.existing_tag.outputs.exists != 'true'
         env:
           TRACKER_GIT_AUTHOR_NAME: ${{ secrets.TRACKER_GIT_AUTHOR_NAME }}
           TRACKER_GIT_AUTHOR_EMAIL: ${{ secrets.TRACKER_GIT_AUTHOR_EMAIL }}
@@ -205,14 +205,14 @@ jobs:
           tag_name="${{ steps.existing_tag.outputs.tag_name }}"
           git config user.name "$author_name"
           git config user.email "$author_email"
-          git tag -a "$tag_name" -m "Legacy release v${{ steps.tracker.outputs.release_version }}
+          git tag -a "$tag_name" -m "Backport release v${{ steps.tracker.outputs.release_version }}
 
-          Dead-end legacy branch head for ${{ steps.tracker.outputs.release_branch }}.
+          Dead-end backport branch head for ${{ steps.tracker.outputs.release_branch }}.
           Upstream release: ${{ steps.tracker.outputs.upstream_release_tag }}"
           git push origin "refs/tags/$tag_name"
 
       - name: Check whether release PR already exists
-        if: steps.tracker.outputs.changed == 'true' && !startsWith(steps.tracker.outputs.release_branch, 'puck/flegacy-release--')
+        if: steps.tracker.outputs.changed == 'true' && !startsWith(steps.tracker.outputs.release_branch, 'puck/backport-release--')
         id: existing_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -227,7 +227,7 @@ jobs:
           echo "url=$pr_url" >> "$GITHUB_OUTPUT"
 
       - name: Create release PR
-        if: steps.tracker.outputs.changed == 'true' && !startsWith(steps.tracker.outputs.release_branch, 'puck/flegacy-release--') && steps.existing_pr.outputs.url == ''
+        if: steps.tracker.outputs.changed == 'true' && !startsWith(steps.tracker.outputs.release_branch, 'puck/backport-release--') && steps.existing_pr.outputs.url == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         working-directory: ${{ env.TARGET_PATH }}

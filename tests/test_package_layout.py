@@ -63,7 +63,7 @@ class PackageLayoutTests(unittest.TestCase):
             REPO_ROOT / "examples" / "README.md",
             REPO_ROOT / "scripts" / "README.md",
             REPO_ROOT / ".github" / "workflows" / "version-tracker.yml",
-            REPO_ROOT / ".github" / "workflows" / "legacy-release.yml",
+            REPO_ROOT / ".github" / "workflows" / "backport-release.yml",
         ]
 
         for path in expected_files:

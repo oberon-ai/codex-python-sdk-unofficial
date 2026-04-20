@@ -715,7 +715,7 @@ def render_tracker_prompt(
         - Keep this repository's package version and GitHub release version in
           sync with the normalized upstream release version `{release_version}`.
         - If the selected release predates the release already tracked on
-          `main`, treat this as a targeted backfill from a clean `main`
+          `main`, treat this as a targeted backport from a clean `main`
           checkout and keep edits limited to the upstream delta between those
           two releases.
         - Always update `{state_path}` to the latest upstream release metadata
@@ -817,7 +817,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--target-version",
         help=(
             "Optional upstream release version or tag to prepare instead of releases/latest. "
-            "Use this from a clean main checkout when backfilling a prior Codex release."
+            "Use this from a clean main checkout when backporting a prior Codex release."
         ),
     )
     parser.add_argument(
@@ -913,7 +913,7 @@ def _render_sync_mode(
     if target_release.published_at < current_release.published_at:
         return textwrap.dedent(
             f"""\
-            - targeted backfill run from clean `main`: the checked-out repository currently tracks
+            - targeted backport run from clean `main`: the checked-out repository currently tracks
               `{current_release.tag_name}`, but this run should prepare `{target_release.tag_name}`.
             - use the upstream compare window only as the minimal change set between those
               releases, then adapt or revert only the mapped local files needed to match the
