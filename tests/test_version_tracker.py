@@ -473,8 +473,16 @@ def test_publish_workflow_releases_and_publishes_from_main() -> None:
     assert '- "main"' in workflow
     assert "codex_meta_agent.release_metadata" in workflow
     assert "codex_meta_agent.version_tracker" not in workflow
+    assert "prepare_release:" in workflow
     assert "gh release create" in workflow
-    assert "Publish to PyPI" in workflow
+    assert "actions/upload-artifact@v4" in workflow
+    assert "actions/download-artifact@v4" in workflow
+    assert "publish_via_token:" in workflow
+    assert "PYPI_PUBLISH_AUTH_MODE == 'api-token'" in workflow
+    assert "Publish to PyPI with API token" in workflow
+    assert "PYPI_API_TOKEN" in workflow
+    assert "publish_via_trusted_publishing:" in workflow
+    assert "Publish to PyPI with trusted publishing" in workflow
     assert "https://pypi.org/project/codex-agent-sdk-unofficial/json" in workflow
 
 
