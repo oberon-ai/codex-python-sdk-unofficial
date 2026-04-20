@@ -20,7 +20,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 concurrency:
   group: legacy-release-${{ inputs.target_version }}
@@ -131,6 +130,19 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check whether legacy tag already exists
+        if: steps.tracker.outputs.changed == 'true'
+        id: existing_tag
+        working-directory: ${{ env.TARGET_PATH }}
+        run: |
+          tag_name="legacy-v${{ steps.tracker.outputs.release_version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag_name" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag_name=$tag_name" >> "$GITHUB_OUTPUT"
+
       - name: Commit legacy release changes
         if: steps.tracker.outputs.changed == 'true' && steps.existing_branch.outputs.exists != 'true'
         env:
@@ -154,37 +166,34 @@ jobs:
           git commit -m "${{ steps.tracker.outputs.commit_message }}"
           git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"
 
-      - name: Check whether legacy release PR already exists
-        if: steps.tracker.outputs.changed == 'true'
-        id: existing_pr
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check out existing legacy branch head
+        if: steps.tracker.outputs.changed == 'true' && steps.existing_branch.outputs.exists == 'true' && steps.existing_tag.outputs.exists != 'true'
         working-directory: ${{ env.TARGET_PATH }}
         run: |
-          pr_url="$(gh pr list \
-            --base main \
-            --head "${{ steps.tracker.outputs.release_branch }}" \
-            --state open \
-            --json url \
-            --jq '.[0].url // ""')"
-          echo "url=$pr_url" >> "$GITHUB_OUTPUT"
+          git fetch origin "${{ steps.tracker.outputs.release_branch }}"
+          git checkout --detach FETCH_HEAD
 
-      - name: Create legacy release PR
-        if: steps.tracker.outputs.changed == 'true' && steps.existing_pr.outputs.url == ''
+      - name: Tag legacy branch head
+        if: steps.tracker.outputs.changed == 'true' && steps.existing_tag.outputs.exists != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TRACKER_GIT_AUTHOR_NAME: ${{ secrets.TRACKER_GIT_AUTHOR_NAME }}
+          TRACKER_GIT_AUTHOR_EMAIL: ${{ secrets.TRACKER_GIT_AUTHOR_EMAIL }}
+          GITHUB_ACTOR_NAME: ${{ github.actor }}
         working-directory: ${{ env.TARGET_PATH }}
         run: |
-          body_file="$(mktemp)"
-          cat > "$body_file" <<EOF
-          Prepare support for an older Codex release from a fresh main checkout.
+          author_name="${TRACKER_GIT_AUTHOR_NAME:-$GITHUB_ACTOR_NAME}"
+          if [ -n "$TRACKER_GIT_AUTHOR_EMAIL" ]; then
+            author_email="$TRACKER_GIT_AUTHOR_EMAIL"
+          elif [ "$GITHUB_ACTOR_NAME" = "github-actions[bot]" ]; then
+            author_email="41898282+github-actions[bot]@users.noreply.github.com"
+          else
+            author_email="$GITHUB_ACTOR_NAME@users.noreply.github.com"
+          fi
+          tag_name="${{ steps.existing_tag.outputs.tag_name }}"
+          git config user.name "$author_name"
+          git config user.email "$author_email"
+          git tag -a "$tag_name" -m "Legacy release v${{ steps.tracker.outputs.release_version }}
 
-          - upstream release: `${{ steps.tracker.outputs.upstream_release_tag }}`
-          - local release version: `v${{ steps.tracker.outputs.release_version }}`
-          - release branch: `${{ steps.tracker.outputs.release_branch }}`
-          EOF
-          gh pr create \
-            --base main \
-            --head "${{ steps.tracker.outputs.release_branch }}" \
-            --title "Legacy release v${{ steps.tracker.outputs.release_version }}" \
-            --body-file "$body_file"
+          Dead-end legacy branch head for ${{ steps.tracker.outputs.release_branch }}.
+          Upstream release: ${{ steps.tracker.outputs.upstream_release_tag }}"
+          git push origin "refs/tags/$tag_name"

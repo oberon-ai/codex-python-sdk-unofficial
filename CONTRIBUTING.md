@@ -214,7 +214,8 @@ The automation is split across:
   `puck/frontier-realese--v<version>`
 - `.github/workflows/legacy-release.yml`
   the manual legacy-release trigger that keeps the same controller-versus-
-  target isolation, prepares `puck/flegacy-release--v<version>`, and opens a PR
+  target isolation, prepares `puck/flegacy-release--v<version>`, and tags that
+  dead-end branch head as `legacy-v<version>` instead of opening a PR
 
 The tracker uses `SyncCodexSDKClient` so the maintenance job exercises the SDK
 itself rather than bypassing it with a separate automation stack.
@@ -230,10 +231,11 @@ uv run python -m codex_meta_agent --target-version 0.119.0 --tracking-branch-pre
 
 The workflow assumes:
 
-- GitHub Actions is allowed to push release-prep branches and open pull
-  requests against `main`
+- GitHub Actions is allowed to push release-prep branches and legacy tags, and
+  to open frontier pull requests against `main`
 - `OPENAI_API_KEY` is available to the runner
-- the release tags in this repository use the normalized `v<version>` format
+- the mainline release tags in this repository use the normalized `v<version>`
+  format, while legacy dead-end branches use `legacy-v<version>`
 
 ## Dependency Changes
 

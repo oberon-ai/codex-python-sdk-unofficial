@@ -432,9 +432,10 @@ def test_version_tracker_workflow_declares_daily_schedule_and_tracking_branch_pu
     assert 'cmd+=(--target-version "$TARGET_VERSION")' in workflow
     assert 'cmd+=(--skip-verification)' in workflow
     assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
+    assert 'tag_name="legacy-v${{ steps.tracker.outputs.release_version }}"' in workflow
+    assert 'git push origin "refs/tags/$tag_name"' in workflow
     assert 'gh pr create \\' in workflow
     assert "Frontier release v${{ steps.tracker.outputs.release_version }}" in workflow
-    assert "Legacy release v${{ steps.tracker.outputs.release_version }}" in workflow
     assert 'git config user.name "$author_name"' in workflow
     assert "HEAD:main" not in workflow
 
@@ -460,8 +461,9 @@ def test_legacy_release_workflow_dispatches_targeted_backfill() -> None:
     assert "--target-version \"$TARGET_VERSION\"" in workflow
     assert '--tracking-branch-prefix "puck/flegacy-release--"' in workflow
     assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
-    assert 'gh pr create \\' in workflow
-    assert "Legacy release v${{ steps.tracker.outputs.release_version }}" in workflow
+    assert 'tag_name="legacy-v${{ steps.tracker.outputs.release_version }}"' in workflow
+    assert 'git push origin "refs/tags/$tag_name"' in workflow
+    assert 'gh pr create \\' not in workflow
 
 
 def test_publish_workflow_releases_and_publishes_from_main() -> None:

@@ -22,14 +22,16 @@ version through `.github/workflows/legacy-release.yml`. The existing
 testing the same legacy flow before the dedicated workflow lands on `main`.
 That targeted mode uses the branch naming convention
 `puck/flegacy-release--v<version>`, is intended for a fresh, clean `main`
-checkout, and keeps the Codex prompt focused on the release delta between the
-currently tracked version and the requested older release.
+checkout, keeps the Codex prompt focused on the release delta between the
+currently tracked version and the requested older release, and treats the
+resulting branch as a dead-end branch marked with `legacy-v<version>`.
 
 The local repository version follows the same semantic version number as the
 tracked Codex release. For example, upstream `rust-v0.120.0` maps to:
 
 - frontier branch: `puck/frontier-realese--v0.120.0`
 - legacy backfill branch: `puck/flegacy-release--v0.120.0`
+- legacy dead-end tag: `legacy-v0.120.0`
 - repository GitHub release tag: `v0.120.0`
 - PyPI package version: `0.120.0`
 
@@ -42,8 +44,8 @@ tracked Codex release. For example, upstream `rust-v0.120.0` maps to:
   new upstream stable release exists
 - `.github/workflows/legacy-release.yml`
   runs only on manual dispatch, keeps the same controller-versus-target
-  isolation, and prepares a legacy-release pull request for an explicitly
-  requested version
+  isolation, and prepares a dead-end legacy-release branch plus a matching
+  `legacy-v<version>` tag for an explicitly requested version
 - `.github/workflows/publish-pypi.yml`
   runs on pushes to `main`, creates the GitHub release if needed, and publishes
   the matching PyPI release if that version is not already on PyPI
@@ -81,8 +83,9 @@ The tracker workflow does the following:
 10. creates or reuses a pull request back to `main`
 
 The manual legacy-release workflow does the same preparation flow, but requires
-an explicit target version and uses `puck/flegacy-release--v<version>` for the
-branch name.
+an explicit target version, uses `puck/flegacy-release--v<version>` for the
+branch name, and tags the resulting branch head as `legacy-v<version>` instead
+of opening a pull request back to `main`.
 
 The deployment workflow on `main` then:
 
