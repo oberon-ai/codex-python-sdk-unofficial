@@ -165,6 +165,19 @@ uv run python -m codex_meta_agent \
   --skip-verification
 ```
 
+Plan a walk backward through historical stable releases, always starting each
+prepared backport from a fresh `main` worktree:
+
+```bash
+uv run python scripts/backport_release_history.py --limit 5
+```
+
+Add `--execute` to actually run Codex against each historical release in a
+temporary worktree. The script writes a JSON report to
+`.codex-meta-agent/backport-history-report.json` and flags releases whose
+upstream compare or prepared diff cross the built-in "major backport"
+thresholds.
+
 By default the tracker writes temporary artifacts under `.codex-meta-agent/`
 and updates `.github/codex-upstream-state.json`.
 

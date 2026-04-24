@@ -11,6 +11,7 @@ class PackageLayoutTests(unittest.TestCase):
     def test_expected_modules_are_importable(self) -> None:
         modules = [
             "codex_meta_agent",
+            "codex_meta_agent.backport_history",
             "codex_meta_agent.release_metadata",
             "codex_meta_agent.version_tracker",
             "codex_agent_sdk.client",
@@ -62,6 +63,7 @@ class PackageLayoutTests(unittest.TestCase):
             REPO_ROOT / "docs" / "codex-options.md",
             REPO_ROOT / "examples" / "README.md",
             REPO_ROOT / "scripts" / "README.md",
+            REPO_ROOT / "scripts" / "backport_release_history.py",
             REPO_ROOT / ".github" / "workflows" / "version-tracker.yml",
             REPO_ROOT / ".github" / "workflows" / "backport-release.yml",
         ]

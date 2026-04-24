@@ -3,10 +3,24 @@
 This directory contains the repository maintenance entry points used to keep
 the vendored schema snapshots and generated protocol artifacts in sync.
 
-The scheduled upstream branch and release tracker is not implemented as a file
-in this directory. It lives under `src/codex_meta_agent/` and is documented in
-`docs/upstream-tracking.md` because it is a first-class package that uses the
-SDK itself.
+The scheduled upstream branch and release tracker still lives under
+`src/codex_meta_agent/` and is documented in `docs/upstream-tracking.md`
+because it is a first-class package that uses the SDK itself.
+
+## `backport_release_history.py`
+
+Plans or executes a walk backward through historical stable Codex releases.
+Each prepared release starts from a fresh `main` worktree instead of chaining
+from the previous backport, and the generated JSON report flags releases whose
+upstream compare window or resulting local diff look like a major backport.
+
+Common commands:
+
+```bash
+uv run python scripts/backport_release_history.py --limit 5
+uv run python scripts/backport_release_history.py --oldest-version 0.110.0
+uv run python scripts/backport_release_history.py --limit 3 --execute --skip-verification
+```
 
 ## `vendor_protocol_schema.py`
 

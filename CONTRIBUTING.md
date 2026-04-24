@@ -227,6 +227,7 @@ uv run python -m codex_meta_agent --dry-run
 uv run python -m codex_meta_agent --skip-verification
 uv run python -m codex_meta_agent --repo-root /tmp/codex-target --skip-verification
 uv run python -m codex_meta_agent --target-version 0.119.0 --tracking-branch-prefix puck/backport-release-- --skip-verification
+uv run python scripts/backport_release_history.py --limit 5
 ```
 
 The workflow assumes:

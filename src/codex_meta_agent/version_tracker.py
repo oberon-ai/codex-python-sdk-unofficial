@@ -260,6 +260,44 @@ class GitHubApiClient:
         self.repository = repository
         self._token = token
 
+    def list_releases(
+        self,
+        *,
+        stable_only: bool = True,
+        limit: int | None = None,
+    ) -> tuple[GitHubRelease, ...]:
+        releases: list[GitHubRelease] = []
+        page = 1
+        while limit is None or len(releases) < limit:
+            payload = self._fetch_json_list(
+                f"/repos/{self.repository}/releases?per_page=100&page={page}"
+            )
+            if not payload:
+                break
+            for release_payload in payload:
+                if stable_only and (
+                    _optional_bool(release_payload, "draft")
+                    or _optional_bool(release_payload, "prerelease")
+                ):
+                    continue
+                tag_name = _require_string(release_payload, "tag_name")
+                releases.append(
+                    GitHubRelease(
+                        tag_name=tag_name,
+                        name=_optional_string(release_payload, "name") or tag_name,
+                        html_url=_require_string(release_payload, "html_url"),
+                        published_at=_require_string(release_payload, "published_at"),
+                        target_commitish=_require_string(release_payload, "target_commitish"),
+                        body=_optional_string(release_payload, "body") or "",
+                    )
+                )
+                if limit is not None and len(releases) >= limit:
+                    break
+            if len(payload) < 100:
+                break
+            page += 1
+        return tuple(releases)
+
     def fetch_release_by_tag(self, tag: str) -> GitHubRelease:
         payload = self._fetch_json(
             f"/repos/{self.repository}/releases/tags/{urllib.parse.quote(tag, safe='')}"
@@ -356,6 +394,14 @@ class GitHubApiClient:
         if not isinstance(payload, dict):
             raise RuntimeError(f"Expected a JSON object from {url}, received {type(payload)!r}.")
         return payload
+
+    def _fetch_json_list(self, path: str) -> list[dict[str, Any]]:
+        url = f"https://api.github.com{path}"
+        text = self._fetch_text(url)
+        payload = json.loads(text)
+        if not isinstance(payload, list):
+            raise RuntimeError(f"Expected a JSON array from {url}, received {type(payload)!r}.")
+        return [item for item in payload if isinstance(item, dict)]
 
     def _fetch_text(self, url: str) -> str:
         request = urllib.request.Request(
@@ -1062,6 +1108,15 @@ def _optional_string(payload: dict[str, Any], key: str) -> str | None:
         return None
     if not isinstance(value, str):
         raise ValueError(f"Expected {key!r} to be a string when present.")
+    return value
+
+
+def _optional_bool(payload: dict[str, Any], key: str) -> bool:
+    value = payload.get(key)
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError(f"Expected {key!r} to be a boolean when present.")
     return value
 
 

@@ -14,7 +14,13 @@ from .release_metadata import (
 )
 
 _VERSION_TRACKER_EXPORT_NAMES = {
+    "BackportCompareStats",
+    "BackportDiffStats",
+    "BackportEffortThresholds",
     "DEFAULT_CONTEXT_DIR",
+    "DEFAULT_BACKPORT_BRANCH_PREFIX",
+    "DEFAULT_BACKPORT_TAG_PREFIX",
+    "DEFAULT_REPORT_PATH",
     "DEFAULT_STATE_PATH",
     "DEFAULT_TRACKING_BRANCH_PREFIX",
     "DEFAULT_UPSTREAM_REPOSITORY",
@@ -30,14 +36,45 @@ _VERSION_TRACKER_EXPORT_NAMES = {
     "VersionTracker",
     "VersionTrackerConfig",
     "VersionTrackerResult",
+    "HistoricalBackportEntry",
+    "assess_backport_effort",
+    "build_backport_branch",
+    "build_backport_tag",
     "build_tracking_branch",
+    "collect_compare_stats",
+    "collect_diff_stats",
+    "execute_historical_backports",
+    "historical_releases_from_state",
     "main",
     "parse_tracker_response",
+    "plan_historical_backports",
     "render_tracker_prompt",
 }
 
 
 def __getattr__(name: str) -> object:
+    if name in {
+        "BackportCompareStats",
+        "BackportDiffStats",
+        "BackportEffortThresholds",
+        "DEFAULT_BACKPORT_BRANCH_PREFIX",
+        "DEFAULT_BACKPORT_TAG_PREFIX",
+        "DEFAULT_REPORT_PATH",
+        "HistoricalBackportEntry",
+        "assess_backport_effort",
+        "build_backport_branch",
+        "build_backport_tag",
+        "collect_compare_stats",
+        "collect_diff_stats",
+        "execute_historical_backports",
+        "historical_releases_from_state",
+        "plan_historical_backports",
+    }:
+        from . import backport_history as _backport_history
+
+        value = getattr(_backport_history, name)
+        globals()[name] = value
+        return value
     if name in _VERSION_TRACKER_EXPORT_NAMES:
         from . import version_tracker as _version_tracker
 
@@ -47,6 +84,12 @@ def __getattr__(name: str) -> object:
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
+    "BackportCompareStats",
+    "BackportDiffStats",
+    "BackportEffortThresholds",
+    "DEFAULT_BACKPORT_BRANCH_PREFIX",
+    "DEFAULT_BACKPORT_TAG_PREFIX",
+    "DEFAULT_REPORT_PATH",
     "DEFAULT_CONTEXT_DIR",
     "DEFAULT_RELEASE_TAG_PREFIX",
     "DEFAULT_STATE_PATH",
@@ -57,6 +100,7 @@ __all__ = [
     "GitHubCompareFile",
     "GitHubCompareResult",
     "GitHubRelease",
+    "HistoricalBackportEntry",
     "TrackingState",
     "TrackerResponse",
     "UpstreamSnapshot",
@@ -64,10 +108,18 @@ __all__ = [
     "VersionTracker",
     "VersionTrackerConfig",
     "VersionTrackerResult",
+    "assess_backport_effort",
+    "build_backport_branch",
+    "build_backport_tag",
     "build_release_tag",
     "build_tracking_branch",
+    "collect_compare_stats",
+    "collect_diff_stats",
+    "execute_historical_backports",
+    "historical_releases_from_state",
     "main",
     "normalize_release_version",
     "parse_tracker_response",
+    "plan_historical_backports",
     "render_tracker_prompt",
 ]

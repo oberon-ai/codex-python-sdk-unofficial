@@ -30,6 +30,9 @@ SDK.
 - [Upstream tracking automation](upstream-tracking.md)
   covers the scheduled GitHub Actions workflow, committed upstream state file,
   and release-tagging policy.
+- [Upstream major changelog](upstream-major-changelog.md)
+  summarizes the major upstream product and platform shifts across recent
+  stable Codex releases.
 - [Scripts guide](../scripts/README.md)
   summarizes the repository maintenance scripts.
 
