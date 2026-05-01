@@ -433,6 +433,9 @@ def test_version_tracker_workflow_declares_daily_schedule_and_tracking_branch_pu
     assert 'tag_name="backport-v${{ steps.tracker.outputs.release_version }}"' in workflow
     assert 'git push origin "refs/tags/$tag_name"' in workflow
     assert "gh pr create \\" in workflow
+    assert "if ! gh pr create \\" in workflow
+    assert "Release branch was pushed, but GitHub Actions could not create the PR" in workflow
+    assert "upstream release: ${{ steps.tracker.outputs.upstream_release_tag }}" in workflow
     assert "Frontier release v${{ steps.tracker.outputs.release_version }}" in workflow
     assert 'git config user.name "$author_name"' in workflow
     assert "HEAD:main" not in workflow

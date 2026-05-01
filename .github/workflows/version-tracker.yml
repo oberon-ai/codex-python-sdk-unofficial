@@ -238,12 +238,14 @@ jobs:
           cat > "$body_file" <<EOF
           $intro
 
-          - upstream release: `${{ steps.tracker.outputs.upstream_release_tag }}`
-          - local release version: `v${{ steps.tracker.outputs.release_version }}`
-          - release branch: `${{ steps.tracker.outputs.release_branch }}`
+          - upstream release: ${{ steps.tracker.outputs.upstream_release_tag }}
+          - local release version: v${{ steps.tracker.outputs.release_version }}
+          - release branch: ${{ steps.tracker.outputs.release_branch }}
           EOF
-          gh pr create \
+          if ! gh pr create \
             --base main \
             --head "${{ steps.tracker.outputs.release_branch }}" \
             --title "$title" \
-            --body-file "$body_file"
+            --body-file "$body_file"; then
+            echo "::warning::Release branch was pushed, but GitHub Actions could not create the PR. Create it manually if repository settings deny GITHUB_TOKEN pull requests."
+          fi
