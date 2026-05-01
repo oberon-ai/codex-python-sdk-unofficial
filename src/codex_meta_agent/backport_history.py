@@ -121,8 +121,10 @@ def assess_backport_effort(
     compare_stats: BackportCompareStats,
     *,
     diff_stats: BackportDiffStats | None = None,
-    thresholds: BackportEffortThresholds = BackportEffortThresholds(),
+    thresholds: BackportEffortThresholds | None = None,
 ) -> tuple[bool, tuple[str, ...]]:
+    if thresholds is None:
+        thresholds = DEFAULT_EFFORT_THRESHOLDS
     notes: list[str] = []
     if compare_stats.commits >= thresholds.compare_commit_count:
         notes.append(
@@ -187,8 +189,10 @@ def plan_historical_backports(
     *,
     oldest_version: str | None = None,
     limit: int | None = None,
-    thresholds: BackportEffortThresholds = BackportEffortThresholds(),
+    thresholds: BackportEffortThresholds | None = None,
 ) -> tuple[HistoricalBackportEntry, ...]:
+    if thresholds is None:
+        thresholds = DEFAULT_EFFORT_THRESHOLDS
     releases = github_client.list_releases(stable_only=True)
     planned_releases = historical_releases_from_state(
         current_state.last_seen_release,
@@ -227,8 +231,10 @@ def execute_historical_backports(
     codex_bin: str = "codex",
     skip_verification: bool = False,
     keep_worktrees: bool = False,
-    thresholds: BackportEffortThresholds = BackportEffortThresholds(),
+    thresholds: BackportEffortThresholds | None = None,
 ) -> tuple[HistoricalBackportEntry, ...]:
+    if thresholds is None:
+        thresholds = DEFAULT_EFFORT_THRESHOLDS
     _maybe_fetch_ref(repo_root, main_ref)
     executed: list[HistoricalBackportEntry] = []
     for entry in entries:
@@ -457,13 +463,13 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         "Historical backport report written to "
-        f"{report_path} for {len(entries)} releases from {current_state.last_seen_release.tag_name}."
+        f"{report_path} for {len(entries)} releases from "
+        f"{current_state.last_seen_release.tag_name}."
     )
     for entry in entries:
         major_marker = " major" if entry.major else ""
         print(
-            f"- {entry.release_version} ({entry.release_tag}) -> "
-            f"{entry.branch_name}{major_marker}"
+            f"- {entry.release_version} ({entry.release_tag}) -> {entry.branch_name}{major_marker}"
         )
         for note in entry.notes:
             print(f"  note: {note}")

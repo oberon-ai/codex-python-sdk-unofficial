@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from codex_agent_sdk import AppServerConfig, CodexOptions, SyncCodexSDKClient
+
 from .release_metadata import (
     DEFAULT_RELEASE_TAG_PREFIX,
     build_release_tag,
@@ -63,6 +64,35 @@ TRACKER_OUTPUT_SCHEMA: dict[str, object] = {
     ],
     "additionalProperties": False,
 }
+
+__all__ = [
+    "DEFAULT_CONTEXT_DIR",
+    "DEFAULT_PROJECT_VERSION_PATH",
+    "DEFAULT_RELEASE_TAG_PREFIX",
+    "DEFAULT_STATE_PATH",
+    "DEFAULT_TRACKING_BRANCH_PREFIX",
+    "DEFAULT_UPSTREAM_REPOSITORY",
+    "DEFAULT_VERIFICATION_COMMANDS",
+    "GitHubApiClient",
+    "GitHubCompareCommit",
+    "GitHubCompareFile",
+    "GitHubCompareResult",
+    "GitHubRelease",
+    "TRACKER_OUTPUT_SCHEMA",
+    "TrackerResponse",
+    "TrackingState",
+    "UpstreamSnapshot",
+    "UpstreamTrackingTarget",
+    "VersionTracker",
+    "VersionTrackerConfig",
+    "VersionTrackerResult",
+    "build_release_tag",
+    "build_tracking_branch",
+    "main",
+    "normalize_release_version",
+    "parse_tracker_response",
+    "render_tracker_prompt",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1067,7 +1097,7 @@ def _order_compare_release_tags(
 def _replace_release_version(tag_template: str, version: str) -> str:
     current_version = normalize_release_version(tag_template)
     if tag_template.endswith(current_version):
-        return f"{tag_template[:-len(current_version)]}{version}"
+        return f"{tag_template[: -len(current_version)]}{version}"
     return version
 
 

@@ -18,7 +18,6 @@ from codex_meta_agent.version_tracker import (
     UpstreamSnapshot,
 )
 
-
 CURRENT_RELEASE = GitHubRelease(
     tag_name="rust-v0.119.0",
     name="0.119.0",

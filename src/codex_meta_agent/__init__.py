@@ -83,6 +83,7 @@ def __getattr__(name: str) -> object:
         return value
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
+
 __all__ = [
     "BackportCompareStats",
     "BackportDiffStats",

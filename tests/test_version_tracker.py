@@ -381,9 +381,7 @@ def test_version_tracker_target_version_backports_prior_release_from_clean_main(
 
     result = tracker.run()
     updated_payload = json.loads(state_path.read_text(encoding="utf-8"))
-    prompt_text = (repo_root / ".codex-meta-agent" / "tracker-brief.md").read_text(
-        encoding="utf-8"
-    )
+    prompt_text = (repo_root / ".codex-meta-agent" / "tracker-brief.md").read_text(encoding="utf-8")
 
     assert prompts, "Codex should be invoked when targeting a different release."
     assert result.release_version == "0.119.0"
@@ -421,7 +419,7 @@ def test_version_tracker_workflow_declares_daily_schedule_and_tracking_branch_pu
     assert "ref: main" in workflow
     assert 'base_ref="${BASE_REF:-main}"' in workflow
     assert 'git checkout --detach "origin/$base_ref"' in workflow
-    assert 'git checkout --detach FETCH_HEAD' in workflow
+    assert "git checkout --detach FETCH_HEAD" in workflow
     assert "npm install --global @openai/codex" in workflow
     assert "codex login --with-api-key" in workflow
     assert "working-directory: ${{ env.CONTROLLER_PATH }}" in workflow
@@ -430,11 +428,11 @@ def test_version_tracker_workflow_declares_daily_schedule_and_tracking_branch_pu
     assert '--repo-root "$TARGET_REPO"' in workflow
     assert '--tracking-branch-prefix "$tracking_branch_prefix"' in workflow
     assert 'cmd+=(--target-version "$TARGET_VERSION")' in workflow
-    assert 'cmd+=(--skip-verification)' in workflow
+    assert "cmd+=(--skip-verification)" in workflow
     assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
     assert 'tag_name="backport-v${{ steps.tracker.outputs.release_version }}"' in workflow
     assert 'git push origin "refs/tags/$tag_name"' in workflow
-    assert 'gh pr create \\' in workflow
+    assert "gh pr create \\" in workflow
     assert "Frontier release v${{ steps.tracker.outputs.release_version }}" in workflow
     assert 'git config user.name "$author_name"' in workflow
     assert "HEAD:main" not in workflow
@@ -453,17 +451,17 @@ def test_backport_release_workflow_dispatches_targeted_backport() -> None:
     assert "path: target" in workflow
     assert "CODEX_HOME: ${{ github.workspace }}/.codex-runtime" in workflow
     assert 'base_ref="${BASE_REF:-main}"' in workflow
-    assert 'git checkout --detach FETCH_HEAD' in workflow
+    assert "git checkout --detach FETCH_HEAD" in workflow
     assert "codex login --with-api-key" in workflow
     assert "working-directory: ${{ env.CONTROLLER_PATH }}" in workflow
     assert "working-directory: ${{ env.TARGET_PATH }}" in workflow
     assert '--repo-root "$TARGET_REPO"' in workflow
-    assert "--target-version \"$TARGET_VERSION\"" in workflow
+    assert '--target-version "$TARGET_VERSION"' in workflow
     assert '--tracking-branch-prefix "puck/backport-release--"' in workflow
     assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
     assert 'tag_name="backport-v${{ steps.tracker.outputs.release_version }}"' in workflow
     assert 'git push origin "refs/tags/$tag_name"' in workflow
-    assert 'gh pr create \\' not in workflow
+    assert "gh pr create \\" not in workflow
 
 
 def test_publish_workflow_releases_and_publishes_from_main() -> None:
@@ -488,7 +486,7 @@ def test_publish_workflow_releases_and_publishes_from_main() -> None:
     assert "publish_via_trusted_publishing:" in workflow
     assert "publish_mode=trusted" in workflow
     assert "Publish to PyPI with trusted publishing" in workflow
-    assert 'name: pypi' in workflow
+    assert "name: pypi" in workflow
     assert "https://pypi.org/project/codex-python-sdk-unofficial/json" in workflow
 
 
