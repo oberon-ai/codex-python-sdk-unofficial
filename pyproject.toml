@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "codex-python-sdk-unofficial"
-version = "0.119.0"
+version = "0.128.0"
 description = "Unofficial, natively async Python SDK for Codex app-server over JSON-RPC v2 on stdio."
 readme = "README.md"
 requires-python = ">=3.11"
