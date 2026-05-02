@@ -56,6 +56,7 @@ jobs:
           fetch-depth: 0
           clean: true
           path: target
+          token: ${{ secrets.TRACKER_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Ensure fresh target checkout
         env:
@@ -108,7 +109,7 @@ jobs:
       - name: Run upstream version tracker
         id: tracker
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.TRACKER_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TARGET_VERSION: ${{ inputs.target_version }}
           TRACKING_BRANCH_PREFIX: ${{ inputs.tracking_branch_prefix }}
@@ -159,8 +160,8 @@ jobs:
       - name: Commit release-tracking changes
         if: steps.tracker.outputs.changed == 'true' && steps.existing_branch.outputs.exists != 'true'
         env:
-          TRACKER_GIT_AUTHOR_NAME: ${{ secrets.TRACKER_GIT_AUTHOR_NAME }}
-          TRACKER_GIT_AUTHOR_EMAIL: ${{ secrets.TRACKER_GIT_AUTHOR_EMAIL }}
+          TRACKER_GIT_AUTHOR_NAME: ${{ secrets.TRACKER_GIT_AUTHOR_NAME || vars.TRACKER_GIT_AUTHOR_NAME || 'puck-by-oberon' }}
+          TRACKER_GIT_AUTHOR_EMAIL: ${{ secrets.TRACKER_GIT_AUTHOR_EMAIL || vars.TRACKER_GIT_AUTHOR_EMAIL || '276269684+puck-by-oberon@users.noreply.github.com' }}
           GITHUB_ACTOR_NAME: ${{ github.actor }}
         working-directory: ${{ env.TARGET_PATH }}
         run: |
@@ -189,8 +190,8 @@ jobs:
       - name: Tag backport branch head
         if: steps.tracker.outputs.changed == 'true' && startsWith(steps.tracker.outputs.release_branch, 'puck/backport-release--') && steps.existing_tag.outputs.exists != 'true'
         env:
-          TRACKER_GIT_AUTHOR_NAME: ${{ secrets.TRACKER_GIT_AUTHOR_NAME }}
-          TRACKER_GIT_AUTHOR_EMAIL: ${{ secrets.TRACKER_GIT_AUTHOR_EMAIL }}
+          TRACKER_GIT_AUTHOR_NAME: ${{ secrets.TRACKER_GIT_AUTHOR_NAME || vars.TRACKER_GIT_AUTHOR_NAME || 'puck-by-oberon' }}
+          TRACKER_GIT_AUTHOR_EMAIL: ${{ secrets.TRACKER_GIT_AUTHOR_EMAIL || vars.TRACKER_GIT_AUTHOR_EMAIL || '276269684+puck-by-oberon@users.noreply.github.com' }}
           GITHUB_ACTOR_NAME: ${{ github.actor }}
         working-directory: ${{ env.TARGET_PATH }}
         run: |
@@ -215,7 +216,7 @@ jobs:
         if: steps.tracker.outputs.changed == 'true' && !startsWith(steps.tracker.outputs.release_branch, 'puck/backport-release--')
         id: existing_pr
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TRACKER_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
         working-directory: ${{ env.TARGET_PATH }}
         run: |
           pr_url="$(gh pr list \
@@ -229,7 +230,7 @@ jobs:
       - name: Create release PR
         if: steps.tracker.outputs.changed == 'true' && !startsWith(steps.tracker.outputs.release_branch, 'puck/backport-release--') && steps.existing_pr.outputs.url == ''
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TRACKER_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
         working-directory: ${{ env.TARGET_PATH }}
         run: |
           title="Frontier release v${{ steps.tracker.outputs.release_version }}"
@@ -242,10 +243,8 @@ jobs:
           - local release version: v${{ steps.tracker.outputs.release_version }}
           - release branch: ${{ steps.tracker.outputs.release_branch }}
           EOF
-          if ! gh pr create \
+          gh pr create \
             --base main \
             --head "${{ steps.tracker.outputs.release_branch }}" \
             --title "$title" \
-            --body-file "$body_file"; then
-            echo "::warning::Release branch was pushed, but GitHub Actions could not create the PR. Create it manually if repository settings deny GITHUB_TOKEN pull requests."
-          fi
+            --body-file "$body_file"

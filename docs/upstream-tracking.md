@@ -99,24 +99,24 @@ The deployment workflow on `main` then:
 
 ## Git Author Configuration
 
-The tracking workflow commits as `puck-by-oberon`.
+The tracking workflow commits as `puck-by-oberon` by default.
 
-Configure that by setting the repository variable
-`TRACKER_GIT_AUTHOR_EMAIL` to the GitHub email you want attached to those
-commits, ideally the account's noreply email.
-
-The workflow uses:
+The default identity is:
 
 - `git config user.name "puck-by-oberon"`
-- `git config user.email "$TRACKER_GIT_AUTHOR_EMAIL"`
+- `git config user.email "276269684+puck-by-oberon@users.noreply.github.com"`
+
+Override that by setting repository variables or secrets for
+`TRACKER_GIT_AUTHOR_NAME` and `TRACKER_GIT_AUTHOR_EMAIL`.
 
 You do not need a personal access token just to author commits with that name
 and email. The default `GITHUB_TOKEN` is enough to push the tracking branch in
 most repositories.
 
-You would only need a token from the `puck-by-oberon` account if you want the
-GitHub API actions themselves to authenticate as that user instead of
-`github-actions[bot]`, or if repository policy blocks the default token.
+Set a repository secret named `TRACKER_GITHUB_TOKEN` from the `puck-by-oberon`
+account when you want branch pushes and GitHub API actions, including pull
+request creation, to authenticate as that account instead of
+`github-actions[bot]`.
 
 ## Why The Tracker Uses The SDK
 
@@ -191,9 +191,12 @@ The workflows expect:
 - `GITHUB_TOKEN`
   so the tracker can read GitHub metadata, push tracking branches, create pull
   requests, and create repository releases
+- optionally `TRACKER_GITHUB_TOKEN`
+  as a repository secret when the tracker should push branches and create pull
+  requests as `puck-by-oberon`
 - optionally `TRACKER_GIT_AUTHOR_NAME` and `TRACKER_GIT_AUTHOR_EMAIL`
-  as repository or environment secrets when you want automated commits to use a
-  specific identity instead of the triggering actor
+  as repository variables or secrets when you want automated commits to use a
+  specific git author identity
 - either PyPI Trusted Publishing configured for this repository and
   `.github/workflows/publish-pypi.yml`, or
 - a `PYPI_API_TOKEN` secret on the repository or `pypi` environment

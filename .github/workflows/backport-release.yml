@@ -48,6 +48,7 @@ jobs:
           fetch-depth: 0
           clean: true
           path: target
+          token: ${{ secrets.TRACKER_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Ensure fresh target checkout
         env:
@@ -100,7 +101,7 @@ jobs:
       - name: Run backport release tracker
         id: tracker
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.TRACKER_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           TARGET_VERSION: ${{ inputs.target_version }}
           SKIP_VERIFICATION: ${{ inputs.skip_verification }}
@@ -146,8 +147,8 @@ jobs:
       - name: Commit backport release changes
         if: steps.tracker.outputs.changed == 'true' && steps.existing_branch.outputs.exists != 'true'
         env:
-          TRACKER_GIT_AUTHOR_NAME: ${{ secrets.TRACKER_GIT_AUTHOR_NAME }}
-          TRACKER_GIT_AUTHOR_EMAIL: ${{ secrets.TRACKER_GIT_AUTHOR_EMAIL }}
+          TRACKER_GIT_AUTHOR_NAME: ${{ secrets.TRACKER_GIT_AUTHOR_NAME || vars.TRACKER_GIT_AUTHOR_NAME || 'puck-by-oberon' }}
+          TRACKER_GIT_AUTHOR_EMAIL: ${{ secrets.TRACKER_GIT_AUTHOR_EMAIL || vars.TRACKER_GIT_AUTHOR_EMAIL || '276269684+puck-by-oberon@users.noreply.github.com' }}
           GITHUB_ACTOR_NAME: ${{ github.actor }}
         working-directory: ${{ env.TARGET_PATH }}
         run: |
@@ -176,8 +177,8 @@ jobs:
       - name: Tag backport branch head
         if: steps.tracker.outputs.changed == 'true' && steps.existing_tag.outputs.exists != 'true'
         env:
-          TRACKER_GIT_AUTHOR_NAME: ${{ secrets.TRACKER_GIT_AUTHOR_NAME }}
-          TRACKER_GIT_AUTHOR_EMAIL: ${{ secrets.TRACKER_GIT_AUTHOR_EMAIL }}
+          TRACKER_GIT_AUTHOR_NAME: ${{ secrets.TRACKER_GIT_AUTHOR_NAME || vars.TRACKER_GIT_AUTHOR_NAME || 'puck-by-oberon' }}
+          TRACKER_GIT_AUTHOR_EMAIL: ${{ secrets.TRACKER_GIT_AUTHOR_EMAIL || vars.TRACKER_GIT_AUTHOR_EMAIL || '276269684+puck-by-oberon@users.noreply.github.com' }}
           GITHUB_ACTOR_NAME: ${{ github.actor }}
         working-directory: ${{ env.TARGET_PATH }}
         run: |

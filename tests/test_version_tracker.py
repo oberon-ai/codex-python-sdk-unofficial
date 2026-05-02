@@ -415,6 +415,7 @@ def test_version_tracker_workflow_declares_daily_schedule_and_tracking_branch_pu
     assert "pull-requests: write" in workflow
     assert "path: controller" in workflow
     assert "path: target" in workflow
+    assert "token: ${{ secrets.TRACKER_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}" in workflow
     assert "CODEX_HOME: ${{ github.workspace }}/.codex-runtime" in workflow
     assert "ref: main" in workflow
     assert 'base_ref="${BASE_REF:-main}"' in workflow
@@ -433,8 +434,9 @@ def test_version_tracker_workflow_declares_daily_schedule_and_tracking_branch_pu
     assert 'tag_name="backport-v${{ steps.tracker.outputs.release_version }}"' in workflow
     assert 'git push origin "refs/tags/$tag_name"' in workflow
     assert "gh pr create \\" in workflow
-    assert "if ! gh pr create \\" in workflow
-    assert "Release branch was pushed, but GitHub Actions could not create the PR" in workflow
+    assert "TRACKER_GITHUB_TOKEN || secrets.GITHUB_TOKEN" in workflow
+    assert "puck-by-oberon" in workflow
+    assert "276269684+puck-by-oberon@users.noreply.github.com" in workflow
     assert "upstream release: ${{ steps.tracker.outputs.upstream_release_tag }}" in workflow
     assert "Frontier release v${{ steps.tracker.outputs.release_version }}" in workflow
     assert 'git config user.name "$author_name"' in workflow
@@ -452,6 +454,7 @@ def test_backport_release_workflow_dispatches_targeted_backport() -> None:
     assert "skip_verification:" in workflow
     assert "path: controller" in workflow
     assert "path: target" in workflow
+    assert "token: ${{ secrets.TRACKER_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}" in workflow
     assert "CODEX_HOME: ${{ github.workspace }}/.codex-runtime" in workflow
     assert 'base_ref="${BASE_REF:-main}"' in workflow
     assert "git checkout --detach FETCH_HEAD" in workflow
@@ -464,6 +467,9 @@ def test_backport_release_workflow_dispatches_targeted_backport() -> None:
     assert 'git push origin "HEAD:${{ steps.tracker.outputs.release_branch }}"' in workflow
     assert 'tag_name="backport-v${{ steps.tracker.outputs.release_version }}"' in workflow
     assert 'git push origin "refs/tags/$tag_name"' in workflow
+    assert "TRACKER_GITHUB_TOKEN || secrets.GITHUB_TOKEN" in workflow
+    assert "puck-by-oberon" in workflow
+    assert "276269684+puck-by-oberon@users.noreply.github.com" in workflow
     assert "gh pr create \\" not in workflow
 
 
